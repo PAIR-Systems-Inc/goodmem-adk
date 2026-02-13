@@ -139,14 +139,43 @@ We perform two integration tests:
 * [tests/test_optional_env_vars.py](tests/test_optional_env_vars.py) tests the optional environment variables by invoking agents and processing agent responses.
 
 
-## Local Development
+## Project Structure
 
-To use a local checkout instead of the PyPI release, install in editable mode. Run the command below in the root of the repository.
-
-```bash
-pip install -e .
 ```
-
+goodmem-adk/
+├── goodmem_adk/                 # Main package directory
+│   ├── __init__.py              # Package initialization; exports GoodmemPlugin, GoodmemSaveTool, GoodmemFetchTool
+│   ├── client.py                # HTTP client for communicating with Goodmem API
+│   ├── plugin.py                # GoodmemPlugin class for implicit memory management at each agent turn
+│   ├── tools.py                 # GoodmemSaveTool and GoodmemFetchTool classes for explicit memory management
+│   └── memory.py                # Memory model/utilities for managing memory structures
+│
+├── examples/                    # Example agents and utilities
+│   ├── README.md                # Documentation for running example agents
+│   ├── services.py              # Shared utilities for example agents
+│   ├── goodmem_plugin_demo/     # Demo agent using the plugin approach
+│   │   └── agent.py             # Example agent with GoodmemPlugin
+│   └── goodmem_tools_demo/      # Demo agent using the tools approach
+│       └── agent.py             # Example agent with GoodmemSaveTool and GoodmemFetchTool
+│
+├── tests/                       # Test suite
+│   ├── conftest.py              # Pytest configuration and shared fixtures
+│   ├── __init__.py              # Test package initialization
+│   ├── test_client.py           # Unit tests for HTTP client
+│   ├── test_plugin.py           # Unit tests for the plugin
+│   ├── test_tools.py            # Unit tests for save/fetch tools
+│   ├── test_memory.py           # Unit tests for memory models and utilities
+│   ├── test_integration.py      # Integration tests with live Goodmem server (requires environment variables)
+│   └── test_optional_env_vars.py # Integration tests for optional environment variable behavior
+│
+├── docs/                        # Documentation
+│   ├── env-var-test-plan.md     # Test plan for optional environment variables
+│   └── integration-test-plan.md # Test plan for integration tests
+│
+├── pyproject.toml               # Project metadata and dependencies configuration
+├── LICENSE                      # Apache 2.0 license
+└── README.md                    # This file
+```
 
 ## License
 
