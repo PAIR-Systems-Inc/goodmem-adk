@@ -4,10 +4,10 @@ Persistent memory plugin for [Google ADK](https://google.github.io/adk-docs/) ag
 
 There are two main integration points for Goodmem ADK:
 
-|| Approach | Class | Description | Coverage |
-||----------|-------|-------------|----------|
-|| **Plugin** | `GoodmemPlugin` | Implicit but deterministic memory reads and writes at every agent–user turn, triggered by callbacks predefined in ADK. | Saves all conversation turns, including file attachments. Retrieves memory at every turn. |
-|| **Tools** | `GoodmemSaveTool`, `GoodmemFetchTool` | Explicit but non-deterministic memory reads and writes, decided by the agent. | Saves information that the agent decides is important to remember. Retrieves memory when the agent decides it needs to recall. |
+| Approach | Class | Description | Coverage |
+|----------|-------|-------------|----------|
+| **Plugin** | `GoodmemPlugin` | Implicit but deterministic memory reads and writes at every agent–user turn, triggered by callbacks predefined in ADK. | Saves all conversation turns, including file attachments. Retrieves memory at every turn. |
+| **Tools** | `GoodmemSaveTool`, `GoodmemFetchTool` | Explicit but non-deterministic memory reads and writes, decided by the agent. | Saves information that the agent decides is important to remember. Retrieves memory when the agent decides it needs to recall. |
 
 
 See [examples/README.md](examples/README.md) for detailed usage of each integration point with runnable demo agents.
@@ -46,20 +46,20 @@ export GOODMEM_SPACE_NAME="your-space-name"
 
 **Which space is used?**
 
-|| Condition | Behavior |
-||---|---|
-|| `GOODMEM_SPACE_ID` set | Must exist — `ValueError` if not found |
-|| `GOODMEM_SPACE_NAME` set | Looked up by name; auto-created if missing |
-|| Both set | `GOODMEM_SPACE_ID` must exist and its name must match `GOODMEM_SPACE_NAME` |
-|| Neither set | Auto-created as `adk_chat_{user_id}` (plugin) or `adk_tool_{user_id}` (tools) |
+| Condition | Behavior |
+|---|---|
+| `GOODMEM_SPACE_ID` set | Must exist — `ValueError` if not found |
+| `GOODMEM_SPACE_NAME` set | Looked up by name; auto-created if missing |
+| Both set | `GOODMEM_SPACE_ID` must exist and its name must match `GOODMEM_SPACE_NAME` |
+| Neither set | Auto-created as `adk_chat_{user_id}` (plugin) or `adk_tool_{user_id}` (tools) |
 
 **Which embedder is used when creating a space?**
 
-|| Condition | Behavior |
-||---|---|
-|| `GOODMEM_EMBEDDER_ID` set | Must exist — `ValueError` if not found |
-|| Not set, embedders exist in Goodmem instance | First available embedder is used |
-|| Not set, no embedders in Goodmem instance | `gemini-embedding-001` auto-created via `GOOGLE_API_KEY` |
+| Condition | Behavior |
+|---|---|
+| `GOODMEM_EMBEDDER_ID` set | Must exist — `ValueError` if not found |
+| Not set, embedders exist in Goodmem instance | First available embedder is used |
+| Not set, no embedders in Goodmem instance | `gemini-embedding-001` auto-created via `GOOGLE_API_KEY` |
 
 ### Examples
 
