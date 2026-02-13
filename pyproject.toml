@@ -10,7 +10,8 @@ readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
-    { name = "pairsys.ai", email = "support@goodmem.ai" },
+    { name = "Forrest Sheng Bao", email = "forrest@goodmem.ai" },
+    { name = "Bashar Alrfooh", email = "bashar.alrfooh@goodmem.ai" },
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -31,12 +32,19 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-asyncio",
+    "fpdf2",
     "ruff",
     "mypy",
 ]
 
 [tool.setuptools.packages.find]
 include = ["goodmem_adk*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+markers = [
+    "integration: requires live Goodmem server and Gemini API key",
+]
 
 [tool.ruff]
 line-length = 100

@@ -18,6 +18,7 @@ This module provides a plugin that integrates with Goodmem.ai for storing
 and retrieving conversation memories to augment LLM prompts with context.
 """
 
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -32,7 +33,7 @@ from google.genai import types
 from .client import GoodmemClient
 
 
-class GoodmemChatPlugin(BasePlugin):
+class GoodmemPlugin(BasePlugin):
   """ADK plugin for persistent chat memory tracking using Goodmem.
 
   Logs user messages and LLM responses, and retrieves relevant history
@@ -49,15 +50,21 @@ class GoodmemChatPlugin(BasePlugin):
       self,
       base_url: str,
       api_key: str,
-      name: str = "GoodmemChatPlugin",
+      name: str = "GoodmemPlugin",
       embedder_id: Optional[str] = None,
+      space_id: Optional[str] = None,
+      space_name: Optional[str] = None,
       top_k: int = 5,
       debug: bool = False,
   ) -> None:
-    """Initializes the Goodmem Chat Plugin.
+    """Initializes the Goodmem Plugin.
 
     No network calls are made in the constructor. Embedder resolution and
     validation are deferred until first use (e.g. when creating a chat space).
+
+    Space resolution priority: ``space_id`` parameter >
+    ``GOODMEM_SPACE_ID`` env var > ``space_name`` parameter >
+    ``GOODMEM_SPACE_NAME`` env var > default ``adk_chat_{user_id}``.
 
     Args:
       base_url: The base URL for the Goodmem API.
@@ -65,6 +72,10 @@ class GoodmemChatPlugin(BasePlugin):
       name: The name of the plugin.
       embedder_id: The embedder ID to use. If not provided, the first
         available embedder is used when first needed.
+      space_id: Optional space ID to use directly, bypassing name-based
+        lookup and auto-creation. Falls back to ``GOODMEM_SPACE_ID``.
+      space_name: Optional override for the space name. Falls back to
+        ``GOODMEM_SPACE_NAME``, then ``adk_chat_{user_id}``.
       top_k: The number of top-k most relevant entries to retrieve.
       debug: Whether to enable debug mode.
 
@@ -75,7 +86,7 @@ class GoodmemChatPlugin(BasePlugin):
 
     self.debug = debug
     if self.debug:
-      print(f"[DEBUG] GoodmemChatPlugin initialized with name={name}, "
+      print(f"[DEBUG] GoodmemPlugin initialized with name={name}, "
             f"top_k={top_k}")
 
     if base_url is None:
@@ -92,13 +103,16 @@ class GoodmemChatPlugin(BasePlugin):
     self.goodmem_client = GoodmemClient(base_url, api_key, debug=self.debug)
     self._embedder_id = embedder_id
     self._resolved_embedder_id: Optional[str] = None
+    self._space_id = space_id or os.getenv("GOODMEM_SPACE_ID")
+    self._space_name = space_name or os.getenv("GOODMEM_SPACE_NAME")
+    self._space_id_validated = False
     self.top_k: int = top_k
 
   def _get_embedder_id(self) -> str:
     """Returns the embedder ID, resolving and validating on first use.
 
-    Fetches embedders from the API only when first needed (e.g. when
-    creating a new space). Result is cached for subsequent use.
+    Uses :meth:`GoodmemClient.ensure_embedder` which will auto-create a Google Gemini
+    embedder if none exist (requires ``GOOGLE_API_KEY`` env var).
 
     Returns:
       The resolved embedder ID.
@@ -109,29 +123,10 @@ class GoodmemChatPlugin(BasePlugin):
     if self._resolved_embedder_id is not None:
       return self._resolved_embedder_id
 
-    embedders = self.goodmem_client.list_embedders()
-    if not embedders:
-      raise ValueError(
-          "No embedders available in Goodmem. Please create at least one "
-          "embedder in Goodmem."
-      )
-
-    if self._embedder_id is None:
-      resolved = embedders[0].get("embedderId", None)
-    else:
-      if self._embedder_id in [e.get("embedderId") for e in embedders]:
-        resolved = self._embedder_id
-      else:
-        raise ValueError(
-            f"EMBEDDER_ID {self._embedder_id} is not valid. Please provide a "
-            "valid embedder ID"
-        )
-
-    if resolved is None:
-      raise ValueError(
-          "EMBEDDER_ID is not set and no embedders available in Goodmem."
-      )
-
+    resolved = self.goodmem_client.ensure_embedder(
+        embedder_id=self._embedder_id,
+        debug=self.debug,
+    )
     self._resolved_embedder_id = resolved
     return resolved
 
@@ -211,6 +206,50 @@ class GoodmemChatPlugin(BasePlugin):
         # invocation_context needs .session.state
         state = context.session.state
 
+      # If a fixed space_id was provided, ensure it exists
+      if self._space_id:
+        if not self._space_id_validated:
+          if self._space_name:
+            # Both set — validate consistency
+            if self.debug:
+              print("[DEBUG] Both space_id and space_name set, validating "
+                    "consistency...")
+            spaces = self.goodmem_client.list_spaces(name=self._space_name)
+            matched = None
+            for space in spaces:
+              if space.get("name") == self._space_name:
+                matched = space.get("spaceId")
+                break
+            if matched is None:
+              raise ValueError(
+                  f"GOODMEM_SPACE_NAME '{self._space_name}' does not match "
+                  f"any existing space, but GOODMEM_SPACE_ID "
+                  f"'{self._space_id}' was also provided. Remove one or "
+                  f"ensure they refer to the same space."
+              )
+            if matched != self._space_id:
+              raise ValueError(
+                  f"GOODMEM_SPACE_ID '{self._space_id}' and "
+                  f"GOODMEM_SPACE_NAME '{self._space_name}' refer to "
+                  f"different spaces (name resolves to '{matched}'). "
+                  f"Remove one or ensure they match."
+              )
+          else:
+            # Only space_id set — must exist
+            if self.debug:
+              print(f"[DEBUG] Checking if space {self._space_id} exists...")
+            existing = self.goodmem_client.get_space(self._space_id)
+            if existing is None:
+              raise ValueError(
+                  f"GOODMEM_SPACE_ID '{self._space_id}' not found. "
+                  f"The specified space must already exist."
+              )
+          self._space_id_validated = True
+        if self.debug:
+          print(f"[DEBUG] Using configured space_id: {self._space_id}")
+        state['_goodmem_space_id'] = self._space_id
+        return self._space_id
+
       # Check session-persisted cache first
       cached_space_id = state.get('_goodmem_space_id')
       if cached_space_id:
@@ -221,7 +260,7 @@ class GoodmemChatPlugin(BasePlugin):
 
       # Get user_id from context
       user_id = context.user_id
-      space_name = f"adk_chat_{user_id}"
+      space_name = self._space_name or f"adk_chat_{user_id}"
 
       if self.debug:
         print(f"[DEBUG] _get_space_id called for user {user_id}, "

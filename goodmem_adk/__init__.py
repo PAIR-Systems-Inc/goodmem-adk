@@ -16,7 +16,7 @@
 
 Provides three integration points:
 
-- **Plugin**: ``GoodmemChatPlugin`` — automatic memory interception via ADK callbacks
+- **Plugin**: ``GoodmemPlugin`` — automatic memory interception via ADK callbacks
 - **Tools**: ``GoodmemSaveTool`` / ``GoodmemFetchTool`` — explicit agent memory management
 - **Memory Service**: ``GoodmemMemoryService`` — full session-based persistent memory
 """
@@ -24,7 +24,7 @@ Provides three integration points:
 __version__ = "0.1.0"
 
 from .client import GoodmemClient
-from .plugin import GoodmemChatPlugin
+from .plugin import GoodmemPlugin
 from .tools import (
     GoodmemFetchResponse,
     GoodmemFetchTool,
@@ -34,15 +34,17 @@ from .tools import (
     goodmem_fetch,
     goodmem_save,
 )
-from .memory import (
-    GoodmemMemoryService,
-    GoodmemMemoryServiceConfig,
-    format_memory_block_for_prompt,
-)
+
+# Currently not exposed
+# from .memory import (
+#     GoodmemMemoryService,
+#     GoodmemMemoryServiceConfig,
+#     format_memory_block_for_prompt,
+# )
 
 __all__ = [
     "GoodmemClient",
-    "GoodmemChatPlugin",
+    "GoodmemPlugin",
     "GoodmemSaveTool",
     "GoodmemFetchTool",
     "GoodmemSaveResponse",
@@ -50,7 +52,8 @@ __all__ = [
     "MemoryItem",
     "goodmem_save",
     "goodmem_fetch",
-    "GoodmemMemoryService",
-    "GoodmemMemoryServiceConfig",
-    "format_memory_block_for_prompt",
+    # Memory service exports currently not exposed
+    # "GoodmemMemoryService",
+    # "GoodmemMemoryServiceConfig",
+    # "format_memory_block_for_prompt",
 ]

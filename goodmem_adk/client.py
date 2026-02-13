@@ -14,12 +14,13 @@
 
 """Goodmem API client for interacting with Goodmem.ai.
 
-Lives under plugins/goodmem and is shared: used by GoodmemChatPlugin and
+Lives under plugins/goodmem and is shared: used by GoodmemPlugin and
 re-exported for use by tools (goodmem_save, goodmem_fetch). Uses httpx for
 HTTP calls.
 """
 
 import json
+import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -45,7 +46,7 @@ class GoodmemClient:
       debug: Whether to enable debug mode.
     """
     self._base_url = base_url.rstrip("/")
-    self._api_key = api_key
+    self._api_key = api_key.strip()
     self._headers = {"x-api-key": self._api_key}
     self._debug = debug
     self._client = httpx.Client(
@@ -70,12 +71,40 @@ class GoodmemClient:
     except (TypeError, ValueError):
       return f"<non-serializable: {type(value).__name__}>"
 
-  def create_space(self, space_name: str, embedder_id: str) -> Dict[str, Any]:
+  def get_space(self, space_id: str) -> Optional[Dict[str, Any]]:
+    """Gets a space by its ID.
+
+    Args:
+      space_id: The ID of the space to retrieve.
+
+    Returns:
+      The space object, or ``None`` if the space does not exist (404).
+
+    Raises:
+      httpx.HTTPStatusError: If the API request fails with a non-404 error.
+      httpx.RequestError: If the request fails (e.g. connection, timeout).
+    """
+    encoded_space_id = quote(space_id, safe="")
+    url = f"/v1/spaces/{encoded_space_id}"
+    response = self._client.get(url, timeout=30.0)
+    if response.status_code == 404:
+      return None
+    response.raise_for_status()
+    return response.json()
+
+  def create_space(
+      self,
+      space_name: str,
+      embedder_id: str,
+      space_id: Optional[str] = None,
+  ) -> Dict[str, Any]:
     """Creates a new Goodmem space.
 
     Args:
       space_name: The name of the space to create.
       embedder_id: The embedder ID to use for the space.
+      space_id: Optional UUID to assign to the new space. If not provided,
+        the server generates one.
 
     Returns:
       The response JSON containing spaceId.
@@ -85,7 +114,7 @@ class GoodmemClient:
       httpx.RequestError: If the request fails (e.g. connection, timeout).
     """
     url = "/v1/spaces"
-    payload = {
+    payload: Dict[str, Any] = {
         "name": space_name,
         "spaceEmbedders": [
             {"embedderId": embedder_id, "defaultRetrievalWeight": 1.0}
@@ -99,6 +128,8 @@ class GoodmemClient:
             }
         },
     }
+    if space_id is not None:
+      payload["spaceId"] = space_id
     response = self._client.post(url, json=payload, timeout=30.0)
     response.raise_for_status()
     return response.json()
@@ -293,6 +324,58 @@ class GoodmemClient:
     response.raise_for_status()
     return response.json().get("embedders", [])
 
+  def create_embedder(
+      self,
+      display_name: str,
+      provider_type: str,
+      endpoint_url: str,
+      model_identifier: str,
+      dimensionality: int,
+      api_key: str,
+      distribution_type: str = "DENSE",
+      embedder_id: Optional[str] = None,
+  ) -> Dict[str, Any]:
+    """Creates a new embedder.
+
+    Args:
+      display_name: Human-readable name for the embedder.
+      provider_type: Provider type (e.g., "OPENAI").
+      endpoint_url: The endpoint URL for the embedding API.
+      model_identifier: The model identifier (e.g., "gemini-embedding-001").
+      dimensionality: The embedding vector dimensionality.
+      api_key: The API key for the embedding provider.
+      distribution_type: The distribution type (default: "DENSE").
+      embedder_id: Optional UUID to assign to the new embedder. If not
+        provided, the server generates one.
+
+    Returns:
+      The response JSON containing embedderId.
+
+    Raises:
+      httpx.HTTPStatusError: If the API request fails with an error status.
+      httpx.RequestError: If the request fails.
+    """
+    url = "/v1/embedders"
+    payload: Dict[str, Any] = {
+        "displayName": display_name,
+        "providerType": provider_type,
+        "endpointUrl": endpoint_url,
+        "modelIdentifier": model_identifier,
+        "dimensionality": dimensionality,
+        "distributionType": distribution_type,
+        "credentials": {
+            "kind": "CREDENTIAL_KIND_API_KEY",
+            "apiKey": {
+                "inlineSecret": api_key,
+            },
+        },
+    }
+    if embedder_id is not None:
+      payload["embedderId"] = embedder_id
+    response = self._client.post(url, json=payload, timeout=30.0)
+    response.raise_for_status()
+    return response.json()
+
   def get_memory_by_id(self, memory_id: str) -> Dict[str, Any]:
     """Gets a memory by its ID.
 
@@ -337,3 +420,117 @@ class GoodmemClient:
     response.raise_for_status()
     data = response.json()
     return data.get("memories", [])
+
+  # -- embedder helpers ------------------------------------------------------
+
+  # Default Google embedder configuration
+  _GOOGLE_EMBEDDER_DISPLAY_NAME = "gemini-embedding-001"
+  _GOOGLE_EMBEDDER_PROVIDER_TYPE = "OPENAI"
+  _GOOGLE_EMBEDDER_ENDPOINT_URL = (
+      "https://generativelanguage.googleapis.com/v1beta/openai"
+  )
+  _GOOGLE_EMBEDDER_MODEL_ID = "gemini-embedding-001"
+  _GOOGLE_EMBEDDER_DIMENSIONALITY = 1536
+  _GOOGLE_EMBEDDER_DISTRIBUTION_TYPE = "DENSE"
+
+  def ensure_embedder(
+      self,
+      embedder_id: Optional[str] = None,
+      debug: bool = False,
+  ) -> str:
+    """Return a valid embedder ID, creating a Google embedder if needed.
+
+    Resolution order:
+    1. If ``embedder_id`` is provided, it must exist — ``ValueError``
+       if not found.
+    2. If ``embedder_id`` is not provided and embedders already exist,
+       return the first available one.
+    3. If ``embedder_id`` is not provided and no embedders exist,
+       auto-create a ``gemini-embedding-001`` embedder using
+       ``GOOGLE_API_KEY`` (or ``GEMINI_API_KEY``).
+
+    Args:
+      embedder_id: Optional embedder ID that must already exist.
+      debug: Whether to print debug messages.
+
+    Returns:
+      A valid embedder ID.
+
+    Raises:
+      ValueError: If ``embedder_id`` is set but not found, or if no
+        embedders can be resolved and neither ``GOOGLE_API_KEY`` nor
+        ``GEMINI_API_KEY`` is set.
+    """
+    embedders = self.list_embedders()
+
+    if embedder_id is not None:
+      valid_ids = [e.get("embedderId") for e in embedders]
+      if embedder_id in valid_ids:
+        return embedder_id
+      raise ValueError(
+          f"GOODMEM_EMBEDDER_ID '{embedder_id}' not found. "
+          f"Available embedders: {valid_ids}"
+      )
+
+    if embedders:
+      eid = embedders[0].get("embedderId")
+      if eid:
+        if debug:
+          print(f"[DEBUG] Using existing embedder: {eid}")
+        return eid
+
+    # No embedders at all — auto-create with server-generated ID
+    if debug:
+      print(
+          "[DEBUG] No embedders found. Auto-creating Google Gemini embedder "
+          f"({self._GOOGLE_EMBEDDER_MODEL_ID}) using GOOGLE_API_KEY"
+      )
+    return self._auto_create_google_embedder(debug=debug)
+
+  def _auto_create_google_embedder(
+      self,
+      debug: bool = False,
+  ) -> str:
+    """Create a ``gemini-embedding-001`` embedder using ``GOOGLE_API_KEY``.
+
+    Args:
+      debug: Whether to print debug messages.
+
+    Returns:
+      The newly created embedder ID.
+
+    Raises:
+      ValueError: If neither ``GOOGLE_API_KEY`` nor ``GEMINI_API_KEY`` is
+        set.
+    """
+    google_api_key = (
+        os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    )
+    if not google_api_key:
+      raise ValueError(
+          "No embedders available in Goodmem and neither GOOGLE_API_KEY "
+          "nor GEMINI_API_KEY is set. Please create an embedder manually "
+          "or set one of these environment variables to auto-create a "
+          "Google Gemini embedder."
+      )
+
+    response = self.create_embedder(
+        display_name=self._GOOGLE_EMBEDDER_DISPLAY_NAME,
+        provider_type=self._GOOGLE_EMBEDDER_PROVIDER_TYPE,
+        endpoint_url=self._GOOGLE_EMBEDDER_ENDPOINT_URL,
+        model_identifier=self._GOOGLE_EMBEDDER_MODEL_ID,
+        dimensionality=self._GOOGLE_EMBEDDER_DIMENSIONALITY,
+        api_key=google_api_key,
+        distribution_type=self._GOOGLE_EMBEDDER_DISTRIBUTION_TYPE,
+    )
+
+    new_id = response.get("embedderId")
+    if not new_id:
+      raise ValueError(
+          "Failed to auto-create Google embedder: no embedderId in response"
+      )
+
+    if debug:
+      print(f"[DEBUG] Auto-created Google embedder: {new_id}")
+
+    return new_id

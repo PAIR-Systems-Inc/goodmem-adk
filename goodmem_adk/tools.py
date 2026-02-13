@@ -23,6 +23,7 @@ memory storage using Goodmem.ai:
 from __future__ import annotations
 
 import inspect
+import os
 from datetime import datetime
 from datetime import timezone
 import threading
@@ -303,6 +304,8 @@ def _get_or_create_space(
     client: GoodmemClient,
     tool_context: ToolContext,
     embedder_id: Optional[str] = None,
+    space_id: Optional[str] = None,
+    space_name: Optional[str] = None,
     debug: bool = False,
 ) -> tuple[Optional[str], Optional[str]]:
   """Get or create Goodmem space for the current user.
@@ -310,16 +313,61 @@ def _get_or_create_space(
   Returns a tuple of (space_id, error_message). If error_message is not None,
   space_id will be None.
 
+  Space resolution priority: ``space_id`` > ``space_name`` >
+  default ``adk_tool_{user_id}``.
+
   Args:
     client: The GoodmemClient instance.
     tool_context: The tool context with user_id and session state.
     embedder_id: Optional embedder ID to use when creating a new space.
       If None, uses the first available embedder.
+    space_id: Optional space ID to use directly, bypassing name-based
+      lookup and auto-creation.
+    space_name: Optional override for the space name. If not provided,
+      defaults to ``adk_tool_{user_id}``.
     debug: Whether to print debug messages.
 
   Returns:
     Tuple of (space_id, error_message). error_message is None on success.
   """
+  # If a fixed space_id was provided, ensure it exists
+  if space_id:
+    if space_name:
+      # Both set — validate consistency
+      if debug:
+        print("[DEBUG] Both space_id and space_name set, validating "
+              "consistency...")
+      spaces = client.list_spaces(name=space_name)
+      matched = None
+      for space in spaces:
+        if space.get("name") == space_name:
+          matched = space.get("spaceId")
+          break
+      if matched is None:
+        return (None,
+                f"GOODMEM_SPACE_NAME '{space_name}' does not match any "
+                f"existing space, but GOODMEM_SPACE_ID '{space_id}' was "
+                f"also provided. Remove one or ensure they refer to the "
+                f"same space.")
+      if matched != space_id:
+        return (None,
+                f"GOODMEM_SPACE_ID '{space_id}' and GOODMEM_SPACE_NAME "
+                f"'{space_name}' refer to different spaces (name resolves "
+                f"to '{matched}'). Remove one or ensure they match.")
+    else:
+      # Only space_id set — must exist
+      if debug:
+        print(f"[DEBUG] Checking if space {space_id} exists...")
+      existing = client.get_space(space_id)
+      if existing is None:
+        return (None,
+                f"GOODMEM_SPACE_ID '{space_id}' not found. "
+                f"The specified space must already exist.")
+    if debug:
+      print(f"[DEBUG] Using configured space_id: {space_id}")
+    tool_context.state["_goodmem_space_id"] = space_id
+    return (space_id, None)
+
   # Check cache first
   cached_space_id = tool_context.state.get("_goodmem_space_id")
   if cached_space_id:
@@ -330,8 +378,8 @@ def _get_or_create_space(
       )
     return (cached_space_id, None)
 
-  # Construct space name based on user_id
-  space_name = f"adk_tool_{tool_context.user_id}"
+  # Construct space name based on user_id (or use override)
+  space_name = space_name or f"adk_tool_{tool_context.user_id}"
 
   try:
     # Search for existing space
@@ -348,25 +396,12 @@ def _get_or_create_space(
         return (space_id, None)
 
     # Space doesn't exist, need to create it
-    if embedder_id:
-      # Validate the embedder exists
-      embedders = client.list_embedders()
-      embedder_ids = [e["embedderId"] for e in embedders]
-
-      if embedder_id not in embedder_ids:
-        return (
-            None,
-            (
-                f"Configuration error: embedder_id '{embedder_id}' not"
-                f" found. Available embedders: {', '.join(embedder_ids)}"
-            ),
-        )
-    else:
-      # Use first available embedder
-      embedders = client.list_embedders()
-      if not embedders:
-        return (None, "Configuration error: No embedders available in Goodmem.")
-      embedder_id = embedders[0]["embedderId"]
+    try:
+      embedder_id = client.ensure_embedder(
+          embedder_id=embedder_id, debug=debug
+      )
+    except ValueError as e:
+      return (None, f"Configuration error: {e}")
 
     # Create the space
     if debug:
@@ -445,6 +480,8 @@ async def goodmem_save(
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
     embedder_id: Optional[str] = None,
+    space_id: Optional[str] = None,
+    space_name: Optional[str] = None,
     debug: bool = False,
 ) -> GoodmemSaveResponse:
   """Saves important information to persistent memory storage.
@@ -478,6 +515,10 @@ async def goodmem_save(
     base_url: The base URL for the Goodmem API (required).
     api_key: The API key for authentication (required).
     embedder_id: Optional embedder ID to use when creating new spaces.
+    space_id: Optional space ID to use directly, bypassing name-based
+      lookup and auto-creation.
+    space_name: Optional override for the space name. If not provided,
+      defaults to ``adk_tool_{user_id}``.
 
   Returns:
     A GoodmemSaveResponse containing the operation status, memory ID, and
@@ -518,14 +559,15 @@ async def goodmem_save(
     client = _get_client(base_url=base_url, api_key=api_key, debug=debug)
 
     # Get or create space for this user
-    space_id, error = _get_or_create_space(
-        client, tool_context, embedder_id=embedder_id, debug=debug
+    resolved_space_id, error = _get_or_create_space(
+        client, tool_context, embedder_id=embedder_id,
+        space_id=space_id, space_name=space_name, debug=debug,
     )
     if error:
       if debug:
         print(f"[DEBUG] Failed to get or create space: {error}")
       return GoodmemSaveResponse(success=False, message=error)
-    if space_id is None:
+    if resolved_space_id is None:
       if debug:
         print("[DEBUG] No space_id returned, aborting dump")
       return GoodmemSaveResponse(
@@ -550,9 +592,9 @@ async def goodmem_save(
 
     # Insert text memory into Goodmem
     if debug:
-      print(f"[DEBUG] Inserting text memory into space {space_id}")
+      print(f"[DEBUG] Inserting text memory into space {resolved_space_id}")
     response = client.insert_memory(
-        space_id=space_id,
+        space_id=resolved_space_id,
         content=content,
         content_type="text/plain",
         metadata=metadata if metadata else None,
@@ -599,7 +641,7 @@ async def goodmem_save(
                 f"({mime_type}, {len(data)} bytes)"
             )
           client.insert_memory_binary(
-              space_id=space_id,
+              space_id=resolved_space_id,
               content_bytes=data,
               content_type=mime_type,
               metadata=attachment_metadata if attachment_metadata else None,
@@ -664,8 +706,8 @@ async def goodmem_save(
         return GoodmemSaveResponse(
             success=False,
             message=(
-                f"Not found error: Space ID '{space_id}' does not exist. "
-                f"The space may have been deleted. HTTP {status_code}"
+                f"Not found error: Space ID '{resolved_space_id}' does not "
+                f"exist. The space may have been deleted. HTTP {status_code}"
             ),
         )
       else:
@@ -695,19 +737,31 @@ class GoodmemSaveTool(FunctionTool):
       base_url: Optional[str] = None,
       api_key: Optional[str] = None,
       embedder_id: Optional[str] = None,
+      space_id: Optional[str] = None,
+      space_name: Optional[str] = None,
       debug: bool = False,
   ):
     """Initialize the Goodmem save tool.
+
+    Space resolution priority: ``space_id`` parameter >
+    ``GOODMEM_SPACE_ID`` env var > ``space_name`` parameter >
+    ``GOODMEM_SPACE_NAME`` env var > default ``adk_tool_{user_id}``.
 
     Args:
       base_url: The base URL for the Goodmem API (required).
       api_key: The API key for authentication (required).
       embedder_id: Optional embedder ID to use when creating new spaces.
+      space_id: Optional space ID to use directly, bypassing name-based
+        lookup and auto-creation. Falls back to ``GOODMEM_SPACE_ID``.
+      space_name: Optional override for the space name. Falls back to
+        ``GOODMEM_SPACE_NAME``, then ``adk_tool_{user_id}``.
       debug: Enable debug logging.
     """
     self._base_url = base_url
     self._api_key = api_key
     self._embedder_id = embedder_id
+    self._space_id = space_id or os.getenv("GOODMEM_SPACE_ID")
+    self._space_name = space_name or os.getenv("GOODMEM_SPACE_NAME")
     self._debug = debug
 
     # Create a wrapper function that passes the stored config
@@ -722,6 +776,8 @@ class GoodmemSaveTool(FunctionTool):
           base_url=self._base_url,
           api_key=self._api_key,
           embedder_id=self._embedder_id,
+          space_id=self._space_id,
+          space_name=self._space_name,
           debug=self._debug,
       )
 
@@ -730,7 +786,8 @@ class GoodmemSaveTool(FunctionTool):
     original_sig = inspect.signature(goodmem_save)
     params = []
     for name, param in original_sig.parameters.items():
-      if name not in ("base_url", "api_key", "embedder_id", "debug"):
+      if name not in ("base_url", "api_key", "embedder_id", "space_id",
+                       "space_name", "debug"):
         params.append(param)
     setattr(
         _wrapped_save,
@@ -785,6 +842,8 @@ async def goodmem_fetch(
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
     embedder_id: Optional[str] = None,
+    space_id: Optional[str] = None,
+    space_name: Optional[str] = None,
     debug: bool = False,
 ) -> GoodmemFetchResponse:
   """Searches for relevant memories using semantic search.
@@ -814,6 +873,10 @@ async def goodmem_fetch(
     base_url: The base URL for the Goodmem API (required).
     api_key: The API key for authentication (required).
     embedder_id: Optional embedder ID to use when creating new spaces.
+    space_id: Optional space ID to use directly, bypassing name-based
+      lookup and auto-creation.
+    space_name: Optional override for the space name. If not provided,
+      defaults to ``adk_tool_{user_id}``.
 
   Returns:
     A GoodmemFetchResponse containing the retrieved memories and metadata.
@@ -859,14 +922,15 @@ async def goodmem_fetch(
     client = _get_client(base_url=base_url, api_key=api_key, debug=debug)
 
     # Get or create space for this user
-    space_id, error = _get_or_create_space(
-        client, tool_context, embedder_id=embedder_id, debug=debug
+    resolved_space_id, error = _get_or_create_space(
+        client, tool_context, embedder_id=embedder_id,
+        space_id=space_id, space_name=space_name, debug=debug,
     )
     if error:
       if debug:
         print(f"[DEBUG] Failed to get or create space: {error}")
       return GoodmemFetchResponse(success=False, message=error)
-    if space_id is None:
+    if resolved_space_id is None:
       if debug:
         print("[DEBUG] No space_id returned, aborting fetch")
       return GoodmemFetchResponse(
@@ -875,9 +939,9 @@ async def goodmem_fetch(
 
     # Retrieve memories using semantic search
     if debug:
-      print(f"[DEBUG] Retrieving memories from space {space_id}")
+      print(f"[DEBUG] Retrieving memories from space {resolved_space_id}")
     chunks = client.retrieve_memories(
-        query=query, space_ids=[space_id], request_size=top_k
+        query=query, space_ids=[resolved_space_id], request_size=top_k
     )
 
     if not chunks:
@@ -1018,8 +1082,8 @@ async def goodmem_fetch(
         return GoodmemFetchResponse(
             success=False,
             message=(
-                f"Not found error: Space ID '{space_id}' does not exist. "
-                f"The space may have been deleted. HTTP {status_code}"
+                f"Not found error: Space ID '{resolved_space_id}' does not "
+                f"exist. The space may have been deleted. HTTP {status_code}"
             ),
         )
       else:
@@ -1049,21 +1113,33 @@ class GoodmemFetchTool(FunctionTool):
       base_url: Optional[str] = None,
       api_key: Optional[str] = None,
       embedder_id: Optional[str] = None,
+      space_id: Optional[str] = None,
+      space_name: Optional[str] = None,
       top_k: int = 5,
       debug: bool = False,
   ):
     """Initialize the Goodmem fetch tool.
 
+    Space resolution priority: ``space_id`` parameter >
+    ``GOODMEM_SPACE_ID`` env var > ``space_name`` parameter >
+    ``GOODMEM_SPACE_NAME`` env var > default ``adk_tool_{user_id}``.
+
     Args:
       base_url: The base URL for the Goodmem API (required).
       api_key: The API key for authentication (required).
       embedder_id: Optional embedder ID to use when creating new spaces.
+      space_id: Optional space ID to use directly, bypassing name-based
+        lookup and auto-creation. Falls back to ``GOODMEM_SPACE_ID``.
+      space_name: Optional override for the space name. Falls back to
+        ``GOODMEM_SPACE_NAME``, then ``adk_tool_{user_id}``.
       top_k: Default number of memories to retrieve (default: 5, max: 20).
       debug: Enable debug logging.
     """
     self._base_url = base_url
     self._api_key = api_key
     self._embedder_id = embedder_id
+    self._space_id = space_id or os.getenv("GOODMEM_SPACE_ID")
+    self._space_name = space_name or os.getenv("GOODMEM_SPACE_NAME")
     self._top_k = top_k
     self._debug = debug
 
@@ -1084,6 +1160,8 @@ class GoodmemFetchTool(FunctionTool):
           base_url=self._base_url,
           api_key=self._api_key,
           embedder_id=self._embedder_id,
+          space_id=self._space_id,
+          space_name=self._space_name,
           debug=self._debug,
       )
 
@@ -1092,7 +1170,8 @@ class GoodmemFetchTool(FunctionTool):
     original_sig = inspect.signature(goodmem_fetch)
     params = []
     for name, param in original_sig.parameters.items():
-      if name not in ("base_url", "api_key", "embedder_id", "debug"):
+      if name not in ("base_url", "api_key", "embedder_id", "space_id",
+                       "space_name", "debug"):
         # Update top_k default to use instance default
         if name == "top_k":
           params.append(param.replace(default=self._top_k))

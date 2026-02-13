@@ -12,32 +12,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Register GoodmemMemoryService with the ADK service registry.
+"""Service registration for Goodmem ADK integration.
 
-adk web loads services.py from the agents root (this directory when you run
-'adk web .' from examples/). This registration must happen
-before the server resolves --memory_service_uri="goodmem://env".
-
-Edit the GoodmemMemoryService(...) call below to set top_k, timeout,
-split_turn, or debug.
+NOTE: GoodmemMemoryService is currently not exposed in the public API.
+This file is just here for reference.
 """
 
-import os
-
-from google.adk.cli.service_registry import get_service_registry
-from goodmem_adk import GoodmemMemoryService
-
-
-def _goodmem_factory(uri: str, **kwargs):
-    return GoodmemMemoryService(
-        base_url=os.getenv("GOODMEM_BASE_URL"),
-        api_key=os.getenv("GOODMEM_API_KEY"),
-        embedder_id=os.getenv("GOODMEM_EMBEDDER_ID"),
-        top_k=5,
-        timeout=30.0,
-        split_turn=True,
-        debug=False,
-    )
-
-
-get_service_registry().register_memory_service("goodmem", _goodmem_factory)
+# Commented out: GoodmemMemoryService is not yet exposed in the public API.
+# 
+# import os
+# from google.adk.cli.service_registry import get_service_registry
+# from goodmem_adk import GoodmemMemoryService
+#
+# def _goodmem_factory(uri: str, **kwargs):
+#     return GoodmemMemoryService(
+#         # mandatory parameters
+#         base_url=os.getenv("GOODMEM_BASE_URL"),
+#         api_key=os.getenv("GOODMEM_API_KEY"),
+#         # optional parameters
+#         embedder_id=os.getenv("GOODMEM_EMBEDDER_ID"),
+#         space_id=os.getenv("GOODMEM_SPACE_ID"),
+#         space_name=os.getenv("GOODMEM_SPACE_NAME"),
+#         top_k=5,
+#         timeout=30.0,
+#         split_turn=True,
+#         debug=False,
+#     )
+#
+# get_service_registry().register_memory_service("goodmem", _goodmem_factory)

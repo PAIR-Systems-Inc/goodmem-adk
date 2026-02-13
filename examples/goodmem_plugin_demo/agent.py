@@ -21,7 +21,7 @@ import os
 
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
-from goodmem_adk import GoodmemChatPlugin
+from goodmem_adk import GoodmemPlugin
 
 root_agent = LlmAgent(
     model='gemini-2.5-flash',
@@ -30,10 +30,14 @@ root_agent = LlmAgent(
     instruction='Answer user questions to the best of your knowledge',
 )
 
-goodmem_chat_plugin = GoodmemChatPlugin(
+goodmem_chat_plugin = GoodmemPlugin(
+    # mandatory parameters
     base_url=os.getenv("GOODMEM_BASE_URL"),
     api_key=os.getenv("GOODMEM_API_KEY"),
-    embedder_id=os.getenv("EMBEDDER_ID"),
+    # optional parameters
+    embedder_id=os.getenv("GOODMEM_EMBEDDER_ID"), # pin an embedder; must exist
+    space_id=os.getenv("GOODMEM_SPACE_ID"), # pin a space by ID; must exist
+    space_name=os.getenv("GOODMEM_SPACE_NAME"), # override the default space name; auto-creates if not found
     top_k=5,
     debug=False
 )

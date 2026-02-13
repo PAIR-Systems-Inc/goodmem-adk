@@ -22,7 +22,9 @@ Run with::
     GOODMEM_BASE_URL=http://localhost:8080 \
     GOODMEM_API_KEY=<key> \
     GOOGLE_API_KEY=<key> \
-    pytest -m integration -v
+    pytest tests/test_integration.py -v
+
+Either GOOGLE_API_KEY or GEMINI_API_KEY can be used for Gemini authentication.
 """
 
 from __future__ import annotations

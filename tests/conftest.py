@@ -25,9 +25,12 @@ def mock_receipt_pdf() -> bytes:
 
     The receipt contains specific addresses, line items, and a total that
     integration tests can verify via semantic retrieval.
+    
+    The PDF is also saved to mock_receipt.pdf in the repo root for visual inspection.
     """
     from fpdf import FPDF
     from fpdf.enums import XPos, YPos
+    import os
 
     NL = {"new_x": XPos.LMARGIN, "new_y": YPos.NEXT}  # replaces ln=True
 
@@ -87,4 +90,12 @@ def mock_receipt_pdf() -> bytes:
     pdf.cell(col_desc_w, 8, "Total", border="T")
     pdf.cell(col_amt_w, 8, "$4,225.50", border="T", align="R", **NL)
 
-    return bytes(pdf.output())
+    pdf_bytes = bytes(pdf.output())
+    
+    # Save to disk for visual inspection
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    output_path = os.path.join(repo_root, "mock_receipt.pdf")
+    with open(output_path, "wb") as f:
+        f.write(pdf_bytes)
+    
+    return pdf_bytes

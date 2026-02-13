@@ -219,6 +219,8 @@ class GoodmemMemoryService(BaseMemoryService):
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         embedder_id: Optional[str] = None,
+        space_id: Optional[str] = None,
+        space_name: Optional[str] = None,
         config: Optional["GoodmemMemoryServiceConfig"] = None,
         top_k: int = 5,
         timeout: float = 30.0,
@@ -267,6 +269,15 @@ class GoodmemMemoryService(BaseMemoryService):
         self._resolved_embedder_id: Optional[str] = None
         self._embedder_lock = Lock()
 
+        # Space overrides.
+        self._space_id: Optional[str] = (
+            space_id or os.getenv("GOODMEM_SPACE_ID")
+        )
+        self._space_name: Optional[str] = (
+            space_name or os.getenv("GOODMEM_SPACE_NAME")
+        )
+        self._space_id_validated = False
+
         # Per-space locking and caching.
         self._space_cache: Dict[str, str] = {}
         self._space_cache_lock = Lock()
@@ -283,9 +294,8 @@ class GoodmemMemoryService(BaseMemoryService):
     def _get_embedder_id(self) -> str:
         """Return the embedder ID, resolving lazily on first call.
 
-        If ``embedder_id`` was provided to the constructor (or via env var),
-        it is validated against the server's embedder list.  Otherwise the
-        first available embedder is selected deterministically.
+        Uses :meth:`GoodmemClient.ensure_embedder` which will auto-create a Google Gemini
+        embedder if none exist (requires ``GOOGLE_API_KEY`` env var).
 
         Raises:
             ValueError: If no embedders exist or the requested ID is invalid.
@@ -294,43 +304,17 @@ class GoodmemMemoryService(BaseMemoryService):
             if self._resolved_embedder_id is not None:
                 return self._resolved_embedder_id
 
-            embedders = self._client.list_embedders()
-            if not embedders:
-                raise ValueError(
-                    "No embedders available in GoodMem. "
-                    "Please create at least one embedder."
-                )
-
-            if self._embedder_id_arg:
-                valid_ids = [e.get("embedderId") for e in embedders]
-                if self._embedder_id_arg not in valid_ids:
-                    raise ValueError(
-                        f"embedder_id '{self._embedder_id_arg}' is not valid. "
-                        f"Available: {valid_ids}"
-                    )
-                self._resolved_embedder_id = self._embedder_id_arg
-            else:
-                selected = embedders[0]
-                eid = str(selected.get("embedderId", ""))
-                if not eid:
-                    raise ValueError(
-                        "Failed to get embedder ID from first embedder."
-                    )
-                self._resolved_embedder_id = eid
-                logger.info(
-                    "No embedder_id provided; using first available: %s "
-                    "(name: %s)",
-                    eid,
-                    selected.get("name", "unknown"),
-                )
-
+            self._resolved_embedder_id = self._client.ensure_embedder(
+                embedder_id=self._embedder_id_arg,
+                debug=self._debug,
+            )
             return self._resolved_embedder_id
 
     # -- space helpers ------------------------------------------------------
 
     def _get_space_name(self, app_name: str, user_id: str) -> str:
         """Generate space name from app_name and user_id."""
-        return f"adk_memory_{app_name}_{user_id}"
+        return self._space_name or f"adk_memory_{app_name}_{user_id}"
 
     def _get_space_lock(self, cache_key: str) -> Lock:
         """Return a per-space lock for the given cache key."""
@@ -342,8 +326,10 @@ class GoodmemMemoryService(BaseMemoryService):
     def _ensure_space(self, app_name: str, user_id: str) -> str:
         """Ensure a GoodMem space exists for the app/user pair.
 
-        Uses the shared client's server-side name filter with pagination to
-        look up the space efficiently.
+        If ``space_id`` was provided (or via env var), verifies it exists and
+        auto-creates with that ID if missing. If ``space_name`` was provided,
+        looks up by name and auto-creates if needed. Otherwise uses the
+        default naming convention.
 
         Args:
             app_name: The application name.
@@ -352,6 +338,43 @@ class GoodmemMemoryService(BaseMemoryService):
         Returns:
             The space ID for the app/user combination.
         """
+        # If a fixed space_id was provided, ensure it exists
+        if self._space_id:
+            if not self._space_id_validated:
+                if self._space_name:
+                    # Both set — validate consistency
+                    spaces = self._client.list_spaces(name=self._space_name)
+                    matched = None
+                    for space in spaces:
+                        if space.get("name") == self._space_name:
+                            matched = space.get("spaceId")
+                            break
+                    if matched is None:
+                        raise ValueError(
+                            f"GOODMEM_SPACE_NAME '{self._space_name}' does "
+                            f"not match any existing space, but "
+                            f"GOODMEM_SPACE_ID '{self._space_id}' was also "
+                            f"provided. Remove one or ensure they refer to "
+                            f"the same space."
+                        )
+                    if matched != self._space_id:
+                        raise ValueError(
+                            f"GOODMEM_SPACE_ID '{self._space_id}' and "
+                            f"GOODMEM_SPACE_NAME '{self._space_name}' refer "
+                            f"to different spaces (name resolves to "
+                            f"'{matched}'). Remove one or ensure they match."
+                        )
+                else:
+                    # Only space_id set — must exist
+                    existing = self._client.get_space(self._space_id)
+                    if existing is None:
+                        raise ValueError(
+                            f"GOODMEM_SPACE_ID '{self._space_id}' not found. "
+                            f"The specified space must already exist."
+                        )
+                self._space_id_validated = True
+            return self._space_id
+
         cache_key = f"{app_name}:{user_id}"
         lock = self._get_space_lock(cache_key)
 
