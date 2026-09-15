@@ -1,0 +1,10 @@
+{
+  "server_response_keys": [
+    "results"
+  ],
+  "server_memory_metadata": {
+    "role": "assistant",
+    "filename": "audit-note.txt"
+  },
+  "integration_result": []
+}

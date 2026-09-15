@@ -1,0 +1,86 @@
+[
+  {
+    "space_id": "01a0a3bf-6e2a-7033-8f37-f8ba52711ced",
+    "name": "adk_audit_25b05e1a4038",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3bf-77c9-713b-9c18-baa85a9dd6b7",
+    "name": "adk_audit_93f0f5649559",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3c0-74ee-7291-aadb-6d10e4297277",
+    "name": "adk_audit_8ce76dae30f8",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3c0-8160-71f0-b963-9bfa43b9edf3",
+    "name": "adk_audit_83a9541f05a3",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3c4-9a62-74a0-a1a7-1027ea801bc0",
+    "name": "adk_audit_dd208994802a",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3c4-a726-73b6-a8ff-6929690bd730",
+    "name": "adk_audit_4537b0c67d88",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3ce-9583-72ca-86df-2cbb8812e8ed",
+    "name": "adk_audit_2eebbdf4ebda",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3ce-9ff8-749a-ac11-228d92aa75fa",
+    "name": "adk_audit_751aad2d4842",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3ce-b833-764d-9b8d-ff456aca9f35",
+    "name": "shared_08e63cc6d408",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3ce-cf29-7061-b486-75d270ae1adf",
+    "name": "shared_cfb07043152c",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3ce-da2c-70f9-9ab3-674e36f42041",
+    "name": "shared_70b5960edd6a",
+    "matched_recorded_write": true,
+    "interrupted_case": false,
+    "deleted": true
+  },
+  {
+    "space_id": "01a0a3cf-2b78-704a-805f-bdf0dbdb459a",
+    "name": "adk_tool_realuser_009e6fcfa56b",
+    "matched_recorded_write": false,
+    "interrupted_case": true,
+    "deleted": true
+  }
+]

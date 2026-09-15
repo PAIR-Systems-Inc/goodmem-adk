@@ -1,878 +1,202 @@
-# Copyright 2025 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright 2026 pairsys.ai (DBA Goodmem.ai)
+# SPDX-License-Identifier: Apache-2.0
 
-"""GoodMem memory service for ADK.
+"""Internal ADK MemoryService; not part of the package's supported public API.
 
-This module provides a memory service implementation that uses GoodMem as the
-backend for semantic memory storage and retrieval.
-
-GoodMem (https://goodmem.ai) is a vector-based memory service that enables
-semantic search across stored memories. This integration:
-
-- Stores paired user/model conversation turns as text memories
-- Stores user-uploaded binary attachments (PDFs, images) as separate memories
-- Organizes memories into spaces named ``adk_memory_{app_name}_{user_id}``
-- Supports semantic search via the ``search_memory`` method
-
-Example usage::
-
-    from google.adk_community.memory.goodmem import GoodmemMemoryService
-
-    service = GoodmemMemoryService(
-        base_url="https://api.goodmem.ai",
-        api_key="your-api-key",
-    )
-
-See Also:
-    - :class:`GoodmemMemoryServiceConfig` for configuration options
+Session ingestion preserves the existing paired/split-turn behavior. The bounded
+in-process record of accepted writes supports retries within this service's
+lifetime; it is not a durable ingestion ledger across restarts.
 """
 
-from __future__ import annotations
-
 import asyncio
-import logging
-import os
 from collections import OrderedDict
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from threading import Lock
-from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional
 
-import httpx
-from pydantic import BaseModel, Field
-from typing_extensions import override
-
-from google.adk.memory.base_memory_service import BaseMemoryService
-from google.adk.memory.base_memory_service import SearchMemoryResponse
+from goodmem import AsyncGoodmem
+from google.adk.memory.base_memory_service import BaseMemoryService, SearchMemoryResponse
 from google.adk.memory.memory_entry import MemoryEntry
-from .client import GoodmemClient
+from google.adk.sessions.session import Session
 from google.genai import types
+from pydantic import BaseModel, Field
 
-if TYPE_CHECKING:
-    from google.adk.sessions.session import Session
+from ._attachments import attachments_from_content, write_attachment
+from ._backend import Backend, text_from_content
+from ._results import SaveFailure
 
-logger = logging.getLogger("google_adk." + __name__)
+_SESSION_CACHE_SIZE = 1024
 
 
-# ---------------------------------------------------------------------------
-# Utility types and helpers (inlined from memory-service utils)
-# ---------------------------------------------------------------------------
-
-
-class BinaryAttachment(NamedTuple):
-    """Represents a binary attachment extracted from an event."""
-
-    data: bytes
-    mime_type: str
-    display_name: Optional[str] = None
-
-
-def extract_binary_from_event(event: Any) -> List[BinaryAttachment]:
-    """Extract binary attachments (PDFs, images) from an event's content parts.
-
-    Looks for ``inline_data`` parts (e.g. ``types.Blob``) and returns the raw
-    bytes together with the MIME type and optional display name.
-
-    Args:
-        event: The event to extract binary data from.
-
-    Returns:
-        List of BinaryAttachment objects.
-    """
-    content = getattr(event, "content", None)
-    parts = getattr(content, "parts", None)
-    if not parts:
-        logger.debug(
-            "extract_binary_from_event: no parts found (content=%s)",
-            type(content).__name__ if content else None,
-        )
-        return []
-
-    logger.debug(
-        "extract_binary_from_event: found %d parts in event", len(parts)
-    )
-
-    attachments: List[BinaryAttachment] = []
-    for i, part in enumerate(parts):
-        # Log what attributes the part has
-        part_attrs = [
-            attr for attr in ["text", "inline_data", "file_data", "function_call"]
-            if getattr(part, attr, None) is not None
-        ]
-        logger.debug(
-            "extract_binary_from_event: part[%d] has attrs: %s", i, part_attrs
-        )
-
-        inline_data = getattr(part, "inline_data", None)
-        if not inline_data:
-            continue
-
-        data = getattr(inline_data, "data", None)
-        logger.debug(
-            "extract_binary_from_event: part[%d] inline_data.data type=%s, "
-            "mime_type=%s",
-            i,
-            type(data).__name__ if data else None,
-            getattr(inline_data, "mime_type", None),
-        )
-        if not data:
-            continue
-
-        if not isinstance(data, bytes):
-            logger.warning(
-                "Skipping attachment with non-bytes data type: %s",
-                type(data).__name__,
-            )
-            continue
-
-        mime_type = (
-            getattr(inline_data, "mime_type", None) or "application/octet-stream"
-        )
-        display_name = getattr(inline_data, "display_name", None)
-
-        attachments.append(
-            BinaryAttachment(
-                data=data,
-                mime_type=mime_type,
-                display_name=display_name,
-            )
-        )
-
-    return attachments
-
-
-def extract_text_from_event(event: Any) -> str:
-    """Extract user-visible text from an event's content parts.
-
-    Filters out thought parts so that internal metadata is not stored in
-    memories.
-
-    Args:
-        event: The event to extract text from.
-
-    Returns:
-        Combined text from all non-thought text parts, or ``""``.
-    """
-    content = getattr(event, "content", None)
-    parts = getattr(content, "parts", None)
-    if not parts:
-        return ""
-
-    text_parts = [
-        part.text
-        for part in parts
-        if getattr(part, "text", None) and not getattr(part, "thought", False)
-    ]
-    return " ".join(text_parts)
-
-
-# ---------------------------------------------------------------------------
-# Memory service
-# ---------------------------------------------------------------------------
-
-
-class GoodmemMemoryService(BaseMemoryService):
-    """Memory service implementation using GoodMem.
-
-    GoodMem is a vector-based memory storage and retrieval service that provides
-    semantic search capabilities.  This service stores paired user/model turns
-    as text memories and user-uploaded attachments as separate binary memories.
-    Memories are organized into spaces named
-    ``adk_memory_{app_name}_{user_id}``.
-
-    The constructor performs **no network calls**; the embedder is resolved
-    lazily on the first space creation.
-
-    See https://goodmem.ai for more information.
-
-    Args:
-        base_url: GoodMem API URL (e.g. ``https://api.goodmem.ai``).
-            ``/v1`` is **not** included — the shared client adds it per-request.
-        api_key: GoodMem API key (required).
-        embedder_id: Optional embedder ID.  When omitted the first available
-            embedder is selected deterministically on first use.
-        config: Optional :class:`GoodmemMemoryServiceConfig`. If omitted,
-            top_k, timeout, and split_turn are used to build config.
-        top_k: Memories per search (1–100). Default 5. Ignored if
-            config is set.
-        timeout: HTTP request timeout in seconds. Default 30.0. Ignored if
-            config is set.
-        split_turn: If False, one memory per turn (User+LLM); if True, two
-            per turn. Default False. Ignored if config is set.
-        debug: Enable debug logging for this service.
-    """
-
-    _PROCESSED_EVENTS_CACHE_LIMIT = 1024
-
-    def __init__(
-        self,
-        base_url: Optional[str] = None,
-        api_key: Optional[str] = None,
-        embedder_id: Optional[str] = None,
-        space_id: Optional[str] = None,
-        space_name: Optional[str] = None,
-        config: Optional["GoodmemMemoryServiceConfig"] = None,
-        top_k: int = 5,
-        timeout: float = 30.0,
-        split_turn: bool = False,
-        debug: bool = False,
-    ) -> None:
-        # Resolve from constructor args then env vars.
-        resolved_base_url = (
-            base_url or os.getenv("GOODMEM_BASE_URL", "https://api.goodmem.ai")
-        )
-        resolved_api_key = api_key or os.getenv("GOODMEM_API_KEY")
-
-        if not resolved_api_key:
-            raise ValueError(
-                "api_key is required for GoodMem. "
-                "Provide an API key when initializing GoodmemMemoryService "
-                "or set the GOODMEM_API_KEY environment variable."
-            )
-
-        # Strip /v1 suffix if present — the shared client adds it per-request.
-        normalized = resolved_base_url.rstrip("/")
-        if normalized.endswith("/v1"):
-            normalized = normalized[:-3]
-
-        if config is not None:
-            self._config = config
-        else:
-            self._config = GoodmemMemoryServiceConfig(
-                top_k=top_k,
-                timeout=timeout,
-                split_turn=split_turn,
-            )
-        self._debug = debug
-
-        # Enable debug logging if requested.
-        if debug:
-            logger.setLevel(logging.DEBUG)
-
-        # Persistent HTTP connection — no network call at construction time.
-        self._client = GoodmemClient(normalized, resolved_api_key, debug=debug)
-
-        # Lazy embedder resolution.
-        self._embedder_id_arg: Optional[str] = (
-            embedder_id or os.getenv("GOODMEM_EMBEDDER_ID")
-        )
-        self._resolved_embedder_id: Optional[str] = None
-        self._embedder_lock = Lock()
-
-        # Space overrides.
-        self._space_id: Optional[str] = (
-            space_id or os.getenv("GOODMEM_SPACE_ID")
-        )
-        self._space_name: Optional[str] = (
-            space_name or os.getenv("GOODMEM_SPACE_NAME")
-        )
-        self._space_id_validated = False
-
-        # Per-space locking and caching.
-        self._space_cache: Dict[str, str] = {}
-        self._space_cache_lock = Lock()
-        self._space_locks: Dict[str, Lock] = {}
-        self._space_locks_lock = Lock()
-
-        # Dedup tracking — keeps last-processed event index per session.
-        self._processed_events: "OrderedDict[str, int]" = OrderedDict()
-        self._processed_events_limit = self._PROCESSED_EVENTS_CACHE_LIMIT
-        self._processed_events_lock = Lock()
-
-    # -- embedder helpers ---------------------------------------------------
-
-    def _get_embedder_id(self) -> str:
-        """Return the embedder ID, resolving lazily on first call.
-
-        Uses :meth:`GoodmemClient.ensure_embedder` which will auto-create a Google Gemini
-        embedder if none exist (requires ``GOOGLE_API_KEY`` env var).
-
-        Raises:
-            ValueError: If no embedders exist or the requested ID is invalid.
-        """
-        with self._embedder_lock:
-            if self._resolved_embedder_id is not None:
-                return self._resolved_embedder_id
-
-            self._resolved_embedder_id = self._client.ensure_embedder(
-                embedder_id=self._embedder_id_arg,
-                debug=self._debug,
-            )
-            return self._resolved_embedder_id
-
-    # -- space helpers ------------------------------------------------------
-
-    def _get_space_name(self, app_name: str, user_id: str) -> str:
-        """Generate space name from app_name and user_id."""
-        return self._space_name or f"adk_memory_{app_name}_{user_id}"
-
-    def _get_space_lock(self, cache_key: str) -> Lock:
-        """Return a per-space lock for the given cache key."""
-        with self._space_locks_lock:
-            if cache_key not in self._space_locks:
-                self._space_locks[cache_key] = Lock()
-            return self._space_locks[cache_key]
-
-    def _ensure_space(self, app_name: str, user_id: str) -> str:
-        """Ensure a GoodMem space exists for the app/user pair.
-
-        If ``space_id`` was provided (or via env var), verifies it exists and
-        auto-creates with that ID if missing. If ``space_name`` was provided,
-        looks up by name and auto-creates if needed. Otherwise uses the
-        default naming convention.
-
-        Args:
-            app_name: The application name.
-            user_id: The user ID.
-
-        Returns:
-            The space ID for the app/user combination.
-        """
-        # If a fixed space_id was provided, ensure it exists
-        if self._space_id:
-            if not self._space_id_validated:
-                if self._space_name:
-                    # Both set — validate consistency
-                    spaces = self._client.list_spaces(name=self._space_name)
-                    matched = None
-                    for space in spaces:
-                        if space.get("name") == self._space_name:
-                            matched = space.get("spaceId")
-                            break
-                    if matched is None:
-                        raise ValueError(
-                            f"GOODMEM_SPACE_NAME '{self._space_name}' does "
-                            f"not match any existing space, but "
-                            f"GOODMEM_SPACE_ID '{self._space_id}' was also "
-                            f"provided. Remove one or ensure they refer to "
-                            f"the same space."
-                        )
-                    if matched != self._space_id:
-                        raise ValueError(
-                            f"GOODMEM_SPACE_ID '{self._space_id}' and "
-                            f"GOODMEM_SPACE_NAME '{self._space_name}' refer "
-                            f"to different spaces (name resolves to "
-                            f"'{matched}'). Remove one or ensure they match."
-                        )
-                else:
-                    # Only space_id set — must exist
-                    existing = self._client.get_space(self._space_id)
-                    if existing is None:
-                        raise ValueError(
-                            f"GOODMEM_SPACE_ID '{self._space_id}' not found. "
-                            f"The specified space must already exist."
-                        )
-                self._space_id_validated = True
-            return self._space_id
-
-        cache_key = f"{app_name}:{user_id}"
-        lock = self._get_space_lock(cache_key)
-
-        with lock:
-            with self._space_cache_lock:
-                if cache_key in self._space_cache:
-                    return self._space_cache[cache_key]
-
-            space_name = self._get_space_name(app_name, user_id)
-
-            try:
-                # Server-side filter + pagination via shared client.
-                spaces = self._client.list_spaces(name=space_name)
-                for space in spaces:
-                    if space.get("name") == space_name:
-                        space_id = space.get("spaceId")
-                        if space_id:
-                            with self._space_cache_lock:
-                                self._space_cache[cache_key] = space_id
-                            logger.debug("Found existing space: %s", space_id)
-                            return space_id
-
-                embedder_id = self._get_embedder_id()
-                response = self._client.create_space(space_name, embedder_id)
-                space_id = response.get("spaceId")
-                if space_id:
-                    with self._space_cache_lock:
-                        self._space_cache[cache_key] = space_id
-                    logger.info("Created new space: %s", space_id)
-                    return space_id
-            except Exception:
-                logger.error(
-                    "Error ensuring space for %s", space_name, exc_info=True
-                )
-                raise
-
-            raise ValueError(
-                f"Failed to create or find space for {space_name}"
-            )
-
-    async def _ensure_space_async(self, app_name: str, user_id: str) -> str:
-        """Async wrapper around :meth:`_ensure_space`."""
-        return await asyncio.to_thread(self._ensure_space, app_name, user_id)
-
-    # -- dedup tracking -----------------------------------------------------
-
-    def _set_processed_event_index(
-        self, session_key: str, index: int
-    ) -> None:
-        """Store the last processed event index with simple LRU eviction."""
-        with self._processed_events_lock:
-            self._processed_events[session_key] = index
-            self._processed_events.move_to_end(session_key)
-            if len(self._processed_events) > self._processed_events_limit:
-                self._processed_events.popitem(last=False)
-
-    # -- binary attachment saving -------------------------------------------
-
-    async def _save_binary_attachment(
-        self,
-        attachment: BinaryAttachment,
-        session: "Session",
-        space_id: str,
-    ) -> bool:
-        """Save a binary attachment (PDF, image) to GoodMem.
-
-        Uses the shared client's multipart binary upload (raw bytes).
-
-        Returns:
-            ``True`` if saved successfully, ``False`` otherwise.
-        """
-        metadata: Dict[str, Any] = {
-            "app_name": session.app_name,
-            "user_id": session.user_id,
-            "session_id": session.id,
-            "source": "adk_session",
-            "role": "user",
-        }
-        if attachment.display_name:
-            metadata["filename"] = attachment.display_name
-
-        try:
-            logger.debug(
-                "Saving binary attachment: %s (%s, %d bytes)",
-                attachment.display_name or "unnamed",
-                attachment.mime_type,
-                len(attachment.data),
-            )
-            await asyncio.to_thread(
-                self._client.insert_memory_binary,
-                space_id=space_id,
-                content_bytes=attachment.data,
-                content_type=attachment.mime_type,
-                metadata=metadata,
-            )
-            logger.debug("Binary attachment saved successfully")
-            return True
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Failed to save binary attachment: HTTP %s - %s",
-                e.response.status_code,
-                e.response.text,
-            )
-            return False
-        except httpx.RequestError as e:
-            logger.error("Failed to save binary attachment: %s", e)
-            return False
-
-    # -- BaseMemoryService interface ----------------------------------------
-
-    @override
-    async def add_session_to_memory(self, session: "Session") -> None:
-        """Add a session's events to GoodMem memory.
-
-        Handles both text conversations and binary attachments.  Binary
-        attachments from user events are saved as separate memories.  Text
-        memories are stored as paired user query + model response.
-
-        Args:
-            session: The session to add to memory.
-        """
-        logger.debug(
-            "add_session_to_memory: app_name=%s, user_id=%s, session_id=%s",
-            session.app_name,
-            session.user_id,
-            session.id,
-        )
-        logger.debug("Session has %d events", len(session.events))
-        space_id = await self._ensure_space_async(
-            session.app_name, session.user_id
-        )
-        logger.debug("Using space_id: %s", space_id)
-
-        memories_added = 0
-        attachments_added = 0
-        last_successful_event_idx = -1
-
-        # Dedup: skip events already persisted in earlier calls.
-        session_key = (
-            f"{session.app_name}:{session.user_id}:{session.id}"
-        )
-        with self._processed_events_lock:
-            last_processed_idx = self._processed_events.get(
-                session_key, -1
-            )
-        logger.debug(
-            "Last processed event index for session %s: %d",
-            session.id,
-            last_processed_idx,
-        )
-
-        metadata = {
-            "app_name": session.app_name,
-            "user_id": session.user_id,
-            "session_id": session.id,
-            "source": "adk_session",
-        }
-
-        user_text: Optional[str] = None
-        pending_user_idx: Optional[int] = None
-
-        for idx, event in enumerate(session.events):
-            logger.debug(
-                "Processing event[%d]: author=%s, has_content=%s",
-                idx,
-                event.author,
-                event.content is not None,
-            )
-            # Skip already-processed events but track user_text for pairing.
-            if idx <= last_processed_idx:
-                if event.author == "user":
-                    text = extract_text_from_event(event)
-                    if text:
-                        user_text = text
-                        pending_user_idx = idx
-                continue
-
-            event_fully_processed = True
-
-            # Handle binary attachments from user events.
-            if event.author == "user":
-                attachments = extract_binary_from_event(event)
-                logger.debug(
-                    "Event[%d] user event: found %d binary attachments",
-                    idx,
-                    len(attachments),
-                )
-                for attachment in attachments:
-                    if await self._save_binary_attachment(
-                        attachment, session, space_id
-                    ):
-                        attachments_added += 1
-                    else:
-                        event_fully_processed = False
-
-            content_text = extract_text_from_event(event)
-
-            if event.author == "user":
-                if content_text:
-                    user_text = content_text
-                    pending_user_idx = idx
-                if event_fully_processed:
-                    last_successful_event_idx = idx
-                continue
-
-            # Skip tool/system events — only pair with model responses.
-            if event.author in ("tool", "system"):
-                continue
-
-            if event.author and content_text:
-                pair_in_one = not self._config.split_turn
-                if user_text:
-                    if pair_in_one:
-                        contents_to_save: List[tuple[str, dict]] = [
-                            (
-                                f"User: {user_text}\nLLM: {content_text}",
-                                metadata,
-                            )
-                        ]
-                    else:
-                        contents_to_save = [
-                            (f"User: {user_text}", {**metadata, "role": "user"}),
-                            (f"LLM: {content_text}", {**metadata, "role": "LLM"}),
-                        ]
-                    user_text = None
-                else:
-                    contents_to_save = [
-                        (f"LLM: {content_text}", metadata),
-                    ]
-
-                turn_success = True
-                for content, meta in contents_to_save:
-                    try:
-                        logger.debug("Saving memory: %s...", content[:100])
-                        await asyncio.to_thread(
-                            self._client.insert_memory,
-                            space_id=space_id,
-                            content=content,
-                            content_type="text/plain",
-                            metadata=meta,
-                        )
-                        memories_added += 1
-                        logger.debug("Memory saved successfully")
-                    except httpx.HTTPStatusError as e:
-                        logger.error(
-                            "Failed to add memory: HTTP %s - %s",
-                            e.response.status_code,
-                            e.response.text,
-                        )
-                        turn_success = False
-                    except httpx.RequestError as e:
-                        logger.error("Failed to add memory: %s", e)
-                        turn_success = False
-                    except Exception as e:  # pylint: disable=broad-exception-caught
-                        logger.error("Failed to add memory: %s", e)
-                        turn_success = False
-                if turn_success:
-                    if (
-                        pending_user_idx is not None
-                        and pending_user_idx > last_successful_event_idx
-                    ):
-                        last_successful_event_idx = pending_user_idx
-                    last_successful_event_idx = idx
-                    pending_user_idx = None
-                else:
-                    event_fully_processed = False
-
-        if last_successful_event_idx >= 0:
-            self._set_processed_event_index(
-                session_key, last_successful_event_idx
-            )
-            logger.debug(
-                "Updated last processed event index for session %s: %d",
-                session.id,
-                last_successful_event_idx,
-            )
-        elif session.events and last_successful_event_idx == -1:
-            logger.warning(
-                "No events were successfully processed for session %s",
-                session.id,
-            )
-
-        logger.info(
-            "Added %d text memories and %d attachments from session %s",
-            memories_added,
-            attachments_added,
-            session.id,
-        )
-
-    def _convert_to_memory_entry(
-        self, chunk_data: Dict[str, Any]
-    ) -> Optional[MemoryEntry]:
-        """Convert a GoodMem retrieved chunk to a :class:`MemoryEntry`.
-
-        Memory format is::
-
-            User: <query>
-            LLM: <response>
-        """
-        try:
-            chunk_info = (
-                chunk_data.get("retrievedItem", {})
-                .get("chunk", {})
-                .get("chunk", {})
-            )
-            raw_content = chunk_info.get("chunkText", "")
-            memory_id = chunk_info.get("memoryId", "")
-            updated_at_ms = chunk_info.get("updatedAt")
-
-            if not raw_content:
-                return None
-
-            timestamp_str: Optional[str] = None
-            if isinstance(updated_at_ms, (int, float)) and updated_at_ms > 0:
-                try:
-                    dt = datetime.fromtimestamp(
-                        float(updated_at_ms) / 1000.0, tz=timezone.utc
-                    )
-                    timestamp_str = dt.strftime("%Y-%m-%d %H:%M")
-                except (ValueError, OSError):
-                    pass
-
-            content = types.Content(parts=[types.Part(text=raw_content)])
-            return MemoryEntry(
-                content=content,
-                author="conversation",
-                timestamp=timestamp_str,
-                id=memory_id,
-            )
-        except (KeyError, ValueError) as e:
-            logger.debug("Failed to convert chunk to MemoryEntry: %s", e)
-            return None
-
-    @override
-    async def search_memory(
-        self, *, app_name: str, user_id: str, query: str
-    ) -> SearchMemoryResponse:
-        """Search for memories in GoodMem using semantic search."""
-        logger.debug(
-            "search_memory: app_name=%s, user_id=%s, query=%s",
-            app_name,
-            user_id,
-            query,
-        )
-        try:
-            space_id = await self._ensure_space_async(app_name, user_id)
-            logger.debug("Using space_id: %s", space_id)
-
-            chunks = await asyncio.to_thread(
-                self._client.retrieve_memories,
-                query=query,
-                space_ids=[space_id],
-                request_size=self._config.top_k,
-            )
-            logger.debug("Query returned %d chunks", len(chunks))
-
-            memories: List[MemoryEntry] = []
-            for chunk in chunks:
-                entry = self._convert_to_memory_entry(chunk)
-                if entry:
-                    memories.append(entry)
-
-            logger.info(
-                "Found %d memories for query: %s", len(memories), query
-            )
-            return SearchMemoryResponse(memories=memories)
-
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "Failed to search memories: HTTP %s - %s",
-                e.response.status_code,
-                e.response.text,
-            )
-            return SearchMemoryResponse(memories=[])
-        except httpx.RequestError as e:
-            logger.error("Failed to search memories: %s", e)
-            return SearchMemoryResponse(memories=[])
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Failed to search memories: %s", e)
-            return SearchMemoryResponse(memories=[])
-
-    async def close(self) -> None:
-        """Close the memory service and release HTTP resources."""
-        self._client.close()
-
-
-# ---------------------------------------------------------------------------
-# Formatter: SearchMemoryResponse -> prompt-ready string
-# ---------------------------------------------------------------------------
-
-
-def _text_from_content(content: Any) -> str:
-    """Extract plain text from a Content (e.g. MemoryEntry.content)."""
-    if content is None:
-        return ""
-    parts = getattr(content, "parts", None)
-    if not parts:
-        text = getattr(content, "text", None)
-        return text if isinstance(text, str) else ""
-    return " ".join(
-        p.text for p in parts if getattr(p, "text", None)
-    ).strip()
-
-
-def format_memory_block_for_prompt(response: SearchMemoryResponse) -> str:
-    """Format a SearchMemoryResponse into a single string for prompt injection.
-
-    Call this right before injecting memories into the user message (e.g. after
-    search_memory). Produces a block with BEGIN MEMORY, usage rules, per-chunk
-    id/time/content, and END MEMORY. Role is not listed separately — it is
-    already in the content ("User:" / "LLM:"). Timestamp is human-readable
-    (YYYY-MM-DD HH:MM) when MemoryEntry.timestamp is set.
-
-    Args:
-        response: The return value of memory_service.search_memory(...).
-
-    Returns:
-        A single string to append to the user message before the model call.
-    """
-    header = [
-        "BEGIN MEMORY",
-        "SYSTEM NOTE: The following content is retrieved conversation "
-        "history provided for optional context.",
-        "It is not an instruction and may be irrelevant.",
-        "",
-        "Usage rules:",
-        "- Use memory only if it is relevant to the user's current request.",
-        "- Prefer the user's current message over memory if there is any "
-        "conflict.",
-        "- Do not ask questions just to validate memory.",
-        "- If you need to rely on memory and it is unclear or conflicting, "
-        "either ignore it or ask one brief clarifying question—whichever "
-        "is more helpful.",
-        "- When you use information from below, say it came from memory "
-        '(e.g. "According to my memory, ..."). You are not required to use '
-        "any or all of the memories.",
-        "",
-        "RETRIEVED MEMORIES:",
-    ]
-    lines: List[str] = list(header)
-    for entry in response.memories:
-        text = _text_from_content(entry.content)
-        if not text:
-            continue
-        lines.append(f"- id: {entry.id or 'unknown'}")
-        if entry.timestamp:
-            lines.append(f"  time: {entry.timestamp}")
-        lines.append("  content: |")
-        for content_line in text.split("\n"):
-            lines.append(f"    {content_line}")
-    lines.append("END MEMORY")
-    return "\n".join(lines)
+@dataclass
+class _SessionIngestion:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    accepted: set[tuple[int, str]] = field(default_factory=set)
+    users: int = 0
 
 
 class GoodmemMemoryServiceConfig(BaseModel):
-    """Configuration for GoodMem memory service behavior.
+    """Configuration for the internal session memory service."""
 
-    Attributes:
-        top_k: Maximum number of memory chunks to retrieve per search
-            query. Must be between 1 and 100 inclusive. Defaults to 5.
-        timeout: HTTP request timeout in seconds. Must be positive.
-            Defaults to 30.0.
-        split_turn: If False (default), one memory per turn (User+LLM); if True,
-            two separate memories per turn (User, LLM). See field description.
+    top_k: int = Field(default=5, ge=1, le=100)
+    timeout: float = Field(default=30.0, gt=0)
+    split_turn: bool = False
 
-    Example::
 
-        from google.adk_community.memory import (
-            GoodmemMemoryService,
-            GoodmemMemoryServiceConfig,
-        )
+class GoodmemMemoryService(BaseMemoryService):
+    """Persist completed session turns with the asynchronous SDK.
 
-        config = GoodmemMemoryServiceConfig(
-            top_k=10,
-            timeout=60.0,
-            split_turn=True,  # separate User/LLM memories
-        )
-        service = GoodmemMemoryService(
-            api_key="your-key",
-            config=config,
-        )
+    SDK write exceptions propagate. A failed write does not advance the accepted
+    record, so retrying ingestion does not skip it or repeat confirmed writes.
     """
 
-    top_k: int = Field(
-        default=5,
-        ge=1,
-        le=100,
-        description="Maximum memories to retrieve per search (1-100).",
-    )
-    timeout: float = Field(
-        default=30.0,
-        gt=0.0,
-        description="HTTP request timeout in seconds.",
-    )
-    split_turn: bool = Field(
-        default=False,
-        description=(
-            "If False (default), store each turn as one memory: 'User: ...\\nLLM: ...'. "
-            "If True, store two separate memories per turn: 'User: ...' and 'LLM: ...'."
-        ),
-    )
+    def __init__(
+        self,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        embedder_id: str | None = None,
+        space_id: str | None = None,
+        space_name: str | None = None,
+        config: GoodmemMemoryServiceConfig | None = None,
+        top_k: int = 5,
+        timeout: float = 30.0,
+        split_turn: bool = False,
+        *,
+        client: AsyncGoodmem | None = None,
+    ) -> None:
+        self._config = config or GoodmemMemoryServiceConfig(
+            top_k=top_k,
+            timeout=timeout,
+            split_turn=split_turn,
+        )
+        self._backend = Backend(
+            client=client,
+            base_url=base_url,
+            api_key=api_key,
+            embedder_id=embedder_id,
+            space_id=space_id,
+            space_name=space_name,
+            timeout=self._config.timeout,
+        )
+        self._sessions: OrderedDict[tuple[str, str, str], _SessionIngestion] = OrderedDict()
+
+    @asynccontextmanager
+    async def _session_ingestion(
+        self, key: tuple[str, str, str]
+    ) -> AsyncIterator[set[tuple[int, str]]]:
+        state = self._sessions.setdefault(key, _SessionIngestion())
+        self._sessions.move_to_end(key)
+        # Count queued callers too: eviction must not replace their lock or ledger.
+        state.users += 1
+        try:
+            async with state.lock:
+                yield state.accepted
+        finally:
+            state.users -= 1
+            for old_key in list(self._sessions):
+                if len(self._sessions) <= _SESSION_CACHE_SIZE:
+                    break
+                if not self._sessions[old_key].users:
+                    del self._sessions[old_key]
+
+    async def add_session_to_memory(self, session: Session) -> None:
+        """Persist user attachments and complete turns, recording each accepted write."""
+        session_key = (session.app_name, session.user_id, session.id)
+        async with (
+            self._session_ingestion(session_key) as accepted,
+            self._backend.connect() as client,
+        ):
+            space_id = await self._backend.resolve_space(
+                client,
+                f"adk_memory_{session.app_name}_{session.user_id}",
+            )
+            metadata = {
+                "app_name": session.app_name,
+                "user_id": session.user_id,
+                "session_id": session.id,
+                "source": "adk_session",
+            }
+            user_text = ""
+            for index, event in enumerate(session.events):
+                if event.partial:
+                    continue
+                text = text_from_content(event.content)
+                if event.author == "user":
+                    for attachment in attachments_from_content(event.content):
+                        if isinstance(attachment, SaveFailure):
+                            raise ValueError(
+                                f"{attachment.filename or 'Attachment'}: {attachment.message}"
+                            )
+                        key = (index, f"attachment_{attachment.part_index}")
+                        if key not in accepted:
+                            await write_attachment(
+                                client.memories,
+                                attachment,
+                                space_id=space_id,
+                                metadata={**metadata, "role": "user"},
+                            )
+                            accepted.add(key)
+                    if text:
+                        user_text = text
+                    continue
+                if event.author in ("tool", "system") or not text:
+                    continue
+                if user_text and self._config.split_turn:
+                    writes = [(f"User: {user_text}", "user"), (f"LLM: {text}", "model")]
+                elif user_text:
+                    writes = [(f"User: {user_text}\nLLM: {text}", "conversation")]
+                else:
+                    writes = [(f"LLM: {text}", "model")]
+                for value, role in writes:
+                    key = (index, role)
+                    if key not in accepted:
+                        await client.memories.create(
+                            space_id=space_id,
+                            original_content=value,
+                            content_type="text/plain",
+                            metadata={**metadata, "role": role},
+                        )
+                        accepted.add(key)
+                user_text = ""
+
+    async def search_memory(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        query: str,
+    ) -> SearchMemoryResponse:
+        """Return matching chunks; surface incomplete retrieval to the caller."""
+        result = await self._backend.fetch(
+            default_name=f"adk_memory_{app_name}_{user_id}",
+            query=query,
+            top_k=self._config.top_k,
+        )
+        # ADK's native response has no field for partial results or statuses.
+        if result.partial:
+            raise RuntimeError(result.model_dump_json())
+        return SearchMemoryResponse(
+            memories=[
+                MemoryEntry(
+                    id=item.chunk_id,
+                    content=types.Content(parts=[types.Part(text=item.content)]),
+                    author=str(item.metadata.get("role", "conversation")),
+                    timestamp=datetime.fromtimestamp(
+                        item.updated_at / 1000,
+                        tz=timezone.utc,
+                    ).isoformat()
+                    if item.updated_at
+                    else None,
+                )
+                for item in result.memories
+            ]
+        )
+
+    async def close(self) -> None:
+        """Owned SDKs close after each operation; an injected SDK belongs to its caller."""
+
+
+def format_memory_block_for_prompt(response: SearchMemoryResponse) -> str:
+    """Format the internal service's retrieved entries for a prompt."""
+    return "\n".join(text_from_content(memory.content) for memory in response.memories)

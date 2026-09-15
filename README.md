@@ -1,182 +1,88 @@
-# Goodmem ADK Plugin
+# GoodMem for Google ADK
 
-Persistent memory plugin for [Google ADK](https://google.github.io/adk-docs/) agents, powered by [Goodmem.ai](https://goodmem.ai).
+Give your ADK agent memory across conversations. GoodMem stores and indexes
+messages and documents; the agent retrieves relevant passages when it needs them.
 
-There are two main integration points for Goodmem ADK:
+Choose **tools** when the agent should decide what to remember, or the **plugin**
+when you want automatic conversation capture and context retrieval.
 
-| Approach | Class | Description | Coverage |
-|----------|-------|-------------|----------|
-| **Plugin** | `GoodmemPlugin` | Implicit but deterministic memory reads and writes at every agent–user turn, triggered by callbacks predefined in ADK. | Saves all conversation turns, including file attachments. Retrieves memory at every turn. |
-| **Tools** | `GoodmemSaveTool`, `GoodmemFetchTool` | Explicit but non-deterministic memory reads and writes, decided by the agent. | Saves information that the agent decides is important to remember. Retrieves memory when the agent decides it needs to recall. |
+## Install
 
-
-See [examples/README.md](examples/README.md) for detailed usage of each integration point with runnable demo agents.
-
-## Quick Start
-
-### Installation
-
-For stable release, install from PyPI.
 ```bash
 pip install goodmem-adk
 ```
 
-For local development, install in editable mode. Run the command below in the root of the repository.
-```bash
-pip install -e .
-```
+You need a [GoodMem server](https://docs.goodmem.ai), an API key, and an existing
+embedder. Set `GOODMEM_BASE_URL` and `GOODMEM_API_KEY`; optionally select an
+embedder with `GOODMEM_EMBEDDER_ID`. Your agent can use any ADK-supported model.
 
-### Set Environment Variables
+## Give your agent memory tools
 
-```bash
-export GOODMEM_BASE_URL="http://localhost:8080"
-export GOODMEM_API_KEY="goodmem-api-key"
-export GOOGLE_API_KEY="your-google-api-key"
-```
-
-Note that `GOODMEM_BASE_URL` shall not have the `/v1` suffix. 
-
-**Optional Environment Variables:**
-
-```bash
-export GOODMEM_EMBEDDER_ID="your-embedder-id"
-export GOODMEM_SPACE_ID="your-space-id"
-export GOODMEM_SPACE_NAME="your-space-name"
-```
-
-**Which space is used?**
-
-| Condition | Behavior |
-|---|---|
-| `GOODMEM_SPACE_ID` set | Must exist — `ValueError` if not found |
-| `GOODMEM_SPACE_NAME` set | Looked up by name; auto-created if missing |
-| Both set | `GOODMEM_SPACE_ID` must exist and its name must match `GOODMEM_SPACE_NAME` |
-| Neither set | Auto-created as `adk_chat_{user_id}` (plugin) or `adk_tool_{user_id}` (tools) |
-
-**Which embedder is used when creating a space?**
-
-| Condition | Behavior |
-|---|---|
-| `GOODMEM_EMBEDDER_ID` set | Must exist — `ValueError` if not found |
-| Not set, embedders exist in Goodmem instance | First available embedder is used |
-| Not set, no embedders in Goodmem instance | `gemini-embedding-001` auto-created via `GOOGLE_API_KEY` |
-
-### Examples
-
-We provide the following examples: 
-* See [examples/README.md](examples/README.md) for demos that can be immediately run with the command `adk web .`.
-* See [tests/test_integration.py](tests/test_integration.py) for integration tests that invoke agents and process agent responses which use the plugin and tools.
-
-### Using the plugin
+This example uses Cohere through ADK's LiteLLM adapter. Install `litellm>=1.84`
+and set `COHERE_API_KEY` separately from your GoodMem credentials.
 
 ```python
-import os
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
+from google.adk.models.lite_llm import LiteLlm
+from goodmem_adk import GoodmemFetchTool, GoodmemSaveTool
+
+root_agent = LlmAgent(
+    name="assistant",
+    model=LiteLlm(model="cohere_chat/command-a-03-2025"),
+    instruction=(
+        "Save facts when asked to remember them. Before answering questions "
+        "about saved facts, call goodmem_fetch, even in a fresh conversation. "
+        "Check tool results and report errors honestly."
+    ),
+    tools=[GoodmemSaveTool(), GoodmemFetchTool()],
+)
+app = App(name="memory_agent", root_agent=root_agent)
+```
+
+Save this as `memory_agent/agent.py`, then run `adk run memory_agent`.
+Ask it to remember a fact, start a fresh session with the same user ID, and ask
+for that fact. [Complete examples](https://github.com/PAIR-Systems-Inc/goodmem-adk/blob/main/examples/README.md) include both integration paths.
+
+## Automatic memory
+
+Instead of adding memory tools, attach the plugin to your app:
+
+```python
+from google.adk.agents import LlmAgent
+from google.adk.apps import App
+from google.adk.models.lite_llm import LiteLlm
 from goodmem_adk import GoodmemPlugin
 
-plugin = GoodmemPlugin(
-    base_url=os.getenv("GOODMEM_BASE_URL"),
-    api_key=os.getenv("GOODMEM_API_KEY"),
+root_agent = LlmAgent(
+    name="assistant",
+    model=LiteLlm(model="cohere_chat/command-a-03-2025"),
+    instruction="Answer using relevant memory context.",
 )
-
-agent = LlmAgent(
+app = App(
     name="memory_agent",
-    model="gemini-2.5-flash",
-    instruction="You are a helpful assistant with persistent memory.",
+    root_agent=root_agent,
+    plugins=[GoodmemPlugin()],
 )
-
-app = App(name="GoodmemPluginDemo", root_agent=agent, plugins=[plugin])
 ```
 
-### Using the tools
+The plugin saves visible user and model messages, uploads inline attachments,
+and supplies relevant context before model calls.
 
-```python
-import os
-from google.adk.agents import LlmAgent
-from google.adk.apps import App
-from goodmem_adk import GoodmemSaveTool, GoodmemFetchTool
+## Scopes and results
 
+Defaults are `adk_tool_{user_id}` for tools and `adk_chat_{user_id}` for the
+plugin. Set the same `space_id` or `space_name` on both to share memory. Explicit
+scopes are shared by everyone using that configuration; defaults separate users,
+not applications. Explicit arguments override environment scope settings.
 
-save_tool = GoodmemSaveTool(
-    base_url=os.getenv("GOODMEM_BASE_URL"),
-    api_key=os.getenv("GOODMEM_API_KEY"),
-)
-fetch_tool = GoodmemFetchTool(
-    base_url=os.getenv("GOODMEM_BASE_URL"),
-    api_key=os.getenv("GOODMEM_API_KEY"),
-)
+Writes return accepted IDs and processing states. Indexing happens asynchronously;
+empty searches are never retried automatically. Failed attachments are reported
+alongside accepted writes. Automatic persistence failures raise an error containing
+those IDs. Fetch results preserve distinct chunks, source metadata, statuses,
+and a `partial` flag when retrieval may be incomplete.
 
-agent = LlmAgent(
-    name="memory_agent",
-    model="gemini-2.5-flash",
-    instruction="You are a helpful assistant with persistent memory.",
-    tools=[save_tool, fetch_tool],
-)
+For connection pooling or custom TLS, pass a caller-owned `AsyncGoodmem` as
+`client=`. Otherwise each operation creates and closes its own asynchronous SDK.
 
-app = App(name="GoodmemToolsDemo", root_agent=agent)
-```
-
-## Testing
-
-Unit tests (no server required):
-
-```bash
-pytest tests/test_client.py tests/test_plugin.py tests/test_tools.py -v
-```
-
-Integration tests (require a live Goodmem server and Gemini API key):
-
-```bash
-GOODMEM_BASE_URL=http://localhost:8080 \
-GOODMEM_API_KEY=<key> \
-GOOGLE_API_KEY=<key> \
-pytest -m integration -v -s
-```
-
-We perform two integration tests:
-* [tests/test_integration.py](tests/test_integration.py) tests the plugin and tools by invoking agents and processing agent responses, covering both text and PDF content.
-* [tests/test_optional_env_vars.py](tests/test_optional_env_vars.py) tests the optional environment variables by invoking agents and processing agent responses.
-
-
-## Project Structure
-
-```
-goodmem-adk/
-├── goodmem_adk/                 # Main package directory
-│   ├── __init__.py              # Package initialization; exports GoodmemPlugin, GoodmemSaveTool, GoodmemFetchTool
-│   ├── client.py                # HTTP client for communicating with Goodmem API
-│   ├── plugin.py                # GoodmemPlugin class for implicit memory management at each agent turn
-│   ├── tools.py                 # GoodmemSaveTool and GoodmemFetchTool classes for explicit memory management
-│   └── memory.py                # Memory model/utilities for managing memory structures
-│
-├── examples/                    # Example agents and utilities
-│   ├── README.md                # Documentation for running example agents
-│   ├── services.py              # Shared utilities for example agents
-│   ├── goodmem_plugin_demo/     # Demo agent using the plugin approach
-│   │   └── agent.py             # Example agent with GoodmemPlugin
-│   └── goodmem_tools_demo/      # Demo agent using the tools approach
-│       └── agent.py             # Example agent with GoodmemSaveTool and GoodmemFetchTool
-│
-├── tests/                       # Test suite
-│   ├── conftest.py              # Pytest configuration and shared fixtures
-│   ├── __init__.py              # Test package initialization
-│   ├── test_client.py           # Unit tests for HTTP client
-│   ├── test_plugin.py           # Unit tests for the plugin
-│   ├── test_tools.py            # Unit tests for save/fetch tools
-│   ├── test_memory.py           # Unit tests for memory models and utilities
-│   ├── test_integration.py      # Integration tests with live Goodmem server (requires environment variables)
-│   └── test_optional_env_vars.py # Integration tests for optional environment variable behavior
-│
-├── docs/                        # Documentation
-│   ├── env-var-test-plan.md     # Test plan for optional environment variables
-│   └── integration-test-plan.md # Test plan for integration tests
-│
-├── pyproject.toml               # Project metadata and dependencies configuration
-├── LICENSE                      # Apache 2.0 license
-└── README.md                    # This file
-```
-
-## License
-
-Apache 2.0
+See the [0.2 migration notes](https://github.com/PAIR-Systems-Inc/goodmem-adk/blob/main/CHANGELOG.md) and [validation guide](https://github.com/PAIR-Systems-Inc/goodmem-adk/blob/main/docs/testing.md).

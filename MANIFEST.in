@@ -1,0 +1,11 @@
+include CHANGELOG.md
+recursive-include tests *.py
+recursive-include examples *.py *.md
+prune audit
+prune docs
+prune .github
+prune .venv
+prune .mypy_cache
+prune .pytest_cache
+prune .ruff_cache
+global-exclude *.py[cod]

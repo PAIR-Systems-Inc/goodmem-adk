@@ -1,101 +1,163 @@
-# Copyright 2026 pairsys.ai (DBA Goodmem.ai)
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+"""SDK-backed fixtures; live resource cleanup runs even after failed assertions."""
 
-"""Shared pytest fixtures for integration tests."""
+import asyncio
+import json
+import os
+from contextlib import ExitStack
 
-from __future__ import annotations
-
+import httpx
 import pytest
+from goodmem import AsyncGoodmem, Goodmem
+from goodmem.errors import NotFoundError
+
+from tests.support import unique
 
 
-@pytest.fixture()
-def mock_receipt_pdf() -> bytes:
-    """Generate a mock receipt PDF (Acme Corp -> GoodMind Inc.) and return raw bytes.
+@pytest.fixture(autouse=True)
+def isolated_configuration(monkeypatch):
+    for name in (
+        "GOODMEM_SPACE_ID",
+        "GOODMEM_SPACE_NAME",
+        "GOODMEM_EMBEDDER_ID",
+        "GOODMEM_BASE_URL",
+        "GOODMEM_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
-    The receipt contains specific addresses, line items, and a total that
-    integration tests can verify via semantic retrieval.
-    
-    The PDF is also saved to mock_receipt.pdf in the repo root for visual inspection.
-    """
-    from fpdf import FPDF
-    from fpdf.enums import XPos, YPos
-    import os
 
-    NL = {"new_x": XPos.LMARGIN, "new_y": YPos.NEXT}  # replaces ln=True
+class LiveServer:
+    def __init__(self, monkeypatch):
+        self.base_url = os.environ["GOODMEM_TEST_BASE_URL"].rstrip("/")
+        self.api_key = os.environ["GOODMEM_TEST_API_KEY"]
+        self.embedder_id = os.environ["GOODMEM_TEST_EMBEDDER_ID"]
+        self.spaces, self.writes, self.requests = {}, [], []
+        self._resources = ExitStack()
+        original_send, original_asend = httpx.Client.send, httpx.AsyncClient.send
 
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=15)
+        def record(request, response):
+            if str(request.url).startswith(self.base_url + "/"):
+                self.requests.append((request.method, request.url.path, response.status_code))
+                if request.method == "POST" and response.is_success:
+                    if request.url.path == "/v1/spaces":
+                        result = response.json()
+                        self.register_space(result["spaceId"], result["name"])
+                    elif request.url.path == "/v1/memories":
+                        self.writes.append(response.json())
 
-    # -- Header / Title --------------------------------------------------------
-    pdf.set_font("Helvetica", "B", 20)
-    pdf.cell(0, 12, "RECEIPT", align="C", **NL)
-    pdf.ln(6)
+        def observe(client, request, *args, **kwargs):
+            response = original_send(client, request, *args, **kwargs)
+            record(request, response)
+            return response
 
-    # -- From: Acme Corp -------------------------------------------------------
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 7, "From:", **NL)
-    pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 6, "Acme Corp", **NL)
-    pdf.cell(0, 6, "123 Innovation Drive", **NL)
-    pdf.cell(0, 6, "San Francisco, CA 94105", **NL)
-    pdf.ln(4)
+        async def observe_async(client, request, *args, **kwargs):
+            response = await original_asend(client, request, *args, **kwargs)
+            record(request, response)
+            return response
 
-    # -- To: GoodMind Inc. -----------------------------------------------------
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(0, 7, "Bill To:", **NL)
-    pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 6, "GoodMind Inc.", **NL)
-    pdf.cell(0, 6, "456 Memory Lane", **NL)
-    pdf.cell(0, 6, "Palo Alto, CA 94301", **NL)
-    pdf.ln(4)
+        monkeypatch.setattr(httpx.Client, "send", observe)
+        monkeypatch.setattr(httpx.AsyncClient, "send", observe_async)
+        self.sdk = self._resources.enter_context(
+            Goodmem(base_url=self.base_url, api_key=self.api_key)
+        )
+        self.http = self._resources.enter_context(
+            httpx.Client(
+                base_url=self.base_url,
+                headers={"x-api-key": self.api_key},
+                timeout=30,
+            )
+        )
 
-    # -- Date ------------------------------------------------------------------
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(40, 7, "Date:")
-    pdf.set_font("Helvetica", "", 11)
-    pdf.cell(0, 7, "January 15, 2026", **NL)
-    pdf.ln(6)
+    @property
+    def config(self):
+        return {"base_url": self.base_url, "api_key": self.api_key, "embedder_id": self.embedder_id}
 
-    # -- Line items table ------------------------------------------------------
-    pdf.set_font("Helvetica", "B", 11)
-    col_desc_w = 120
-    col_amt_w = 50
-    pdf.cell(col_desc_w, 8, "Description", border="B")
-    pdf.cell(col_amt_w, 8, "Amount", border="B", align="R", **NL)
+    def new_space(self, name=None, chunk_size=None):
+        chunking = (
+            {"none": {}}
+            if chunk_size is None
+            else {
+                "recursive": {
+                    "chunkSize": chunk_size,
+                    "chunkOverlap": 0,
+                    "keepStrategy": "KEEP_END",
+                    "lengthMeasurement": "CHARACTER_COUNT",
+                }
+            }
+        )
+        created = self.sdk.spaces.create(
+            name=name or unique(),
+            space_embedders=[{"embedderId": self.embedder_id}],
+            default_chunking_config=chunking,
+        )
+        self.register_space(created.space_id, created.name)
+        return created.space_id
 
-    items = [
-        ("Cloud Computing Services", "$2,450.00"),
-        ("Data Processing", "$1,275.50"),
-        ("Technical Support", "$500.00"),
-    ]
-    pdf.set_font("Helvetica", "", 11)
-    for desc, amt in items:
-        pdf.cell(col_desc_w, 7, desc)
-        pdf.cell(col_amt_w, 7, amt, align="R", **NL)
+    def register_space(self, space_id, name):
+        if space_id in self.spaces:
+            return
+        self.spaces[space_id] = name
+        journal = os.environ.get("GOODMEM_TEST_RESOURCE_JOURNAL")
+        if journal:
+            with open(journal, "a") as file:
+                file.write(json.dumps({"space_id": space_id, "name": name}) + "\n")
 
-    pdf.ln(2)
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.cell(col_desc_w, 8, "Total", border="T")
-    pdf.cell(col_amt_w, 8, "$4,225.50", border="T", align="R", **NL)
+    async def wait_for_writes(self):
+        async with AsyncGoodmem(base_url=self.base_url, api_key=self.api_key) as client:
+            # Each accepted ID gets a bounded wait. Never poll an empty search.
+            for written in list(self.writes):
+                deadline = asyncio.get_running_loop().time() + 60
+                while True:
+                    memory = await client.memories.get(id=written["memoryId"])
+                    if memory.processing_status == "COMPLETED":
+                        break
+                    assert memory.processing_status != "FAILED", (
+                        f"Indexing failed: {memory.memory_id}"
+                    )
+                    assert asyncio.get_running_loop().time() < deadline, (
+                        f"Indexing timeout: {memory.memory_id}"
+                    )
+                    await asyncio.sleep(0.2)
 
-    pdf_bytes = bytes(pdf.output())
-    
-    # Save to disk for visual inspection
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    output_path = os.path.join(repo_root, "mock_receipt.pdf")
-    with open(output_path, "wb") as f:
-        f.write(pdf_bytes)
-    
-    return pdf_bytes
+    def close(self):
+        cleanup, errors = [], []
+        try:
+            for sid, name in self.spaces.items():
+                try:
+                    self.sdk.spaces.delete(id=sid)
+                    try:
+                        self.sdk.spaces.get(id=sid)
+                    except NotFoundError:
+                        cleanup.append({"space_id": sid, "name": name, "deleted": True})
+                    else:
+                        raise AssertionError(f"Space still exists after DELETE: {sid}")
+                except Exception as error:
+                    # Keep cleaning up all remaining resources, then fail teardown.
+                    errors.append(f"{sid}: {error}")
+            evidence = os.environ.get("GOODMEM_TEST_EVIDENCE")
+            if evidence:
+                with open(evidence, "a") as file:
+                    file.write(
+                        json.dumps(
+                            {
+                                "cleanup": cleanup,
+                                "errors": errors,
+                                "requests": self.requests,
+                                "accepted_memory_ids": [item["memoryId"] for item in self.writes],
+                            }
+                        )
+                        + "\n"
+                    )
+        finally:
+            self._resources.close()
+        assert not errors, "Cleanup failed: " + "; ".join(errors)
+
+
+@pytest.fixture
+def live(monkeypatch):
+    if os.environ.get("GOODMEM_TEST_LIVE") != "1":
+        pytest.skip("Set GOODMEM_TEST_LIVE=1 and GOODMEM_TEST_{BASE_URL,API_KEY,EMBEDDER_ID}")
+    server = LiveServer(monkeypatch)
+    try:
+        yield server
+    finally:
+        server.close()
