@@ -1,0 +1,671 @@
+{
+  "package": "goodmem-adk==0.1.1",
+  "adk": "google-adk==2.9.0",
+  "python": "3.13.2",
+  "source_commit": "c9745e336a9d675a4c8da24ace38ea0c6556165e",
+  "wheel_sha256": "ed06227abeab878dcb8245e13267659ae82392a7503c2169bbbe335b16da5ca7",
+  "server": {
+    "version": "server-v1.0.311",
+    "revision": "bac4db46f780b9c7cce4de85f0c13460a38c113c",
+    "digest": "sha256:0897f60a0700d2bd023db69f0907923ad0e25b8ae836e8152d93095417cf5a60"
+  },
+  "model": "cohere_chat/command-a-03-2025",
+  "suites": {
+    "existing_unit": {
+      "counts": {
+        "passed": 112,
+        "failed": 1,
+        "error": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "name": "test_init_sets_base_url",
+          "status": "passed"
+        },
+        {
+          "name": "test_init_strips_trailing_slash",
+          "status": "passed"
+        },
+        {
+          "name": "test_init_sets_api_key",
+          "status": "passed"
+        },
+        {
+          "name": "test_init_sets_default_headers",
+          "status": "passed"
+        },
+        {
+          "name": "test_init_creates_httpx_client",
+          "status": "passed"
+        },
+        {
+          "name": "test_context_manager",
+          "status": "passed"
+        },
+        {
+          "name": "test_insert_memory_sends_json",
+          "status": "passed"
+        },
+        {
+          "name": "test_insert_memory_without_metadata",
+          "status": "passed"
+        },
+        {
+          "name": "test_insert_memory_binary_no_content_type_header",
+          "status": "passed"
+        },
+        {
+          "name": "test_insert_memory_binary_multipart_structure",
+          "status": "passed"
+        },
+        {
+          "name": "test_insert_memory_binary_timeout",
+          "status": "passed"
+        },
+        {
+          "name": "test_create_space",
+          "status": "passed"
+        },
+        {
+          "name": "test_list_spaces_no_filter",
+          "status": "passed"
+        },
+        {
+          "name": "test_list_spaces_with_name_filter",
+          "status": "passed"
+        },
+        {
+          "name": "test_list_spaces_pagination",
+          "status": "passed"
+        },
+        {
+          "name": "test_delete_space",
+          "status": "failed"
+        },
+        {
+          "name": "test_retrieve_memories_parses_ndjson",
+          "status": "passed"
+        },
+        {
+          "name": "test_retrieve_memories_sends_correct_payload",
+          "status": "passed"
+        },
+        {
+          "name": "test_ndjson_empty_response",
+          "status": "passed"
+        },
+        {
+          "name": "test_ndjson_with_blank_lines",
+          "status": "passed"
+        },
+        {
+          "name": "test_default_config",
+          "status": "passed"
+        },
+        {
+          "name": "test_custom_config",
+          "status": "passed"
+        },
+        {
+          "name": "test_config_validation_top_k",
+          "status": "passed"
+        },
+        {
+          "name": "test_service_initialization_no_network_call",
+          "status": "passed"
+        },
+        {
+          "name": "test_service_initialization_requires_api_key",
+          "status": "passed"
+        },
+        {
+          "name": "test_embedder_resolved_on_first_space_creation",
+          "status": "passed"
+        },
+        {
+          "name": "test_embedder_uses_first_available",
+          "status": "passed"
+        },
+        {
+          "name": "test_no_embedders_and_no_api_key_fails",
+          "status": "passed"
+        },
+        {
+          "name": "test_ensure_space_creates_new_space",
+          "status": "passed"
+        },
+        {
+          "name": "test_ensure_space_uses_existing_space",
+          "status": "passed"
+        },
+        {
+          "name": "test_ensure_space_uses_cache",
+          "status": "passed"
+        },
+        {
+          "name": "test_add_session_to_memory_success",
+          "status": "passed"
+        },
+        {
+          "name": "test_add_session_filters_empty_events",
+          "status": "passed"
+        },
+        {
+          "name": "test_search_memory_success",
+          "status": "passed"
+        },
+        {
+          "name": "test_search_memory_error_handling",
+          "status": "passed"
+        },
+        {
+          "name": "test_close_calls_client_close",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_exists",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_not_found_raises",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_env_var",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_name_overrides_default",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_name_env_var",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_and_name_matching",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_and_name_mismatch_raises",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_and_name_not_found_raises",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_validation_runs_once",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_param_overrides_env",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_name_auto_creates_if_not_exists",
+          "status": "passed"
+        },
+        {
+          "name": "test_embedder_id_specified_and_valid",
+          "status": "passed"
+        },
+        {
+          "name": "test_embedder_id_specified_invalid_raises",
+          "status": "passed"
+        },
+        {
+          "name": "test_auto_create_embedder_with_google_api_key",
+          "status": "passed"
+        },
+        {
+          "name": "test_empty_response",
+          "status": "passed"
+        },
+        {
+          "name": "test_one_chunk_with_timestamp",
+          "status": "passed"
+        },
+        {
+          "name": "test_chunk_without_timestamp",
+          "status": "passed"
+        },
+        {
+          "name": "test_plugin_initialization",
+          "status": "passed"
+        },
+        {
+          "name": "test_plugin_initialization_no_embedder_id",
+          "status": "passed"
+        },
+        {
+          "name": "test_plugin_initialization_no_network_call",
+          "status": "passed"
+        },
+        {
+          "name": "test_plugin_initialization_requires_base_url",
+          "status": "passed"
+        },
+        {
+          "name": "test_plugin_initialization_requires_api_key",
+          "status": "passed"
+        },
+        {
+          "name": "test_get_space_id_creates_new_space",
+          "status": "passed"
+        },
+        {
+          "name": "test_get_space_id_uses_existing_space",
+          "status": "passed"
+        },
+        {
+          "name": "test_get_space_id_uses_cache",
+          "status": "passed"
+        },
+        {
+          "name": "test_on_user_message_logs_text",
+          "status": "passed"
+        },
+        {
+          "name": "test_before_model_callback_augments_request",
+          "status": "passed"
+        },
+        {
+          "name": "test_after_model_callback_logs_response",
+          "status": "passed"
+        },
+        {
+          "name": "test_multi_user_isolation",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_param_exists",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_not_found_raises",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_env_var",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_name_param_overrides_default",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_name_env_var",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_and_name_matching",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_and_name_mismatch_raises",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_and_name_not_found_raises",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_validation_runs_once",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_param_overrides_env",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_name_param_overrides_env",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_name_auto_creates_if_not_exists",
+          "status": "passed"
+        },
+        {
+          "name": "test_embedder_id_specified_and_valid",
+          "status": "passed"
+        },
+        {
+          "name": "test_embedder_id_specified_invalid_raises",
+          "status": "passed"
+        },
+        {
+          "name": "test_first_available_embedder_used",
+          "status": "passed"
+        },
+        {
+          "name": "test_auto_create_embedder_with_google_api_key",
+          "status": "passed"
+        },
+        {
+          "name": "test_no_embedders_no_api_key_raises",
+          "status": "passed"
+        },
+        {
+          "name": "test_save_success",
+          "status": "passed"
+        },
+        {
+          "name": "test_save_missing_base_url",
+          "status": "passed"
+        },
+        {
+          "name": "test_save_missing_api_key",
+          "status": "passed"
+        },
+        {
+          "name": "test_save_without_tool_context",
+          "status": "passed"
+        },
+        {
+          "name": "test_save_creates_space_if_not_exists",
+          "status": "passed"
+        },
+        {
+          "name": "test_save_uses_cached_space_id",
+          "status": "passed"
+        },
+        {
+          "name": "test_fetch_success",
+          "status": "passed"
+        },
+        {
+          "name": "test_fetch_no_results",
+          "status": "passed"
+        },
+        {
+          "name": "test_fetch_top_k_capped",
+          "status": "passed"
+        },
+        {
+          "name": "test_default_space_name",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_name_override",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_name_creates_if_not_exists",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_exists",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_not_found_returns_error",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_and_space_name_matching",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_and_space_name_mismatch",
+          "status": "passed"
+        },
+        {
+          "name": "test_space_id_and_space_name_not_found",
+          "status": "passed"
+        },
+        {
+          "name": "test_embedder_id_specified_and_valid",
+          "status": "passed"
+        },
+        {
+          "name": "test_embedder_id_specified_invalid_returns_error",
+          "status": "passed"
+        },
+        {
+          "name": "test_first_available_embedder_used",
+          "status": "passed"
+        },
+        {
+          "name": "test_auto_create_embedder_with_google_api_key",
+          "status": "passed"
+        },
+        {
+          "name": "test_no_embedders_no_api_key_fails",
+          "status": "passed"
+        },
+        {
+          "name": "test_save_tool_reads_space_id_env",
+          "status": "passed"
+        },
+        {
+          "name": "test_save_tool_reads_space_name_env",
+          "status": "passed"
+        },
+        {
+          "name": "test_save_tool_param_overrides_env",
+          "status": "passed"
+        },
+        {
+          "name": "test_fetch_tool_reads_space_id_env",
+          "status": "passed"
+        },
+        {
+          "name": "test_fetch_tool_reads_space_name_env",
+          "status": "passed"
+        },
+        {
+          "name": "test_format_timestamp_for_table",
+          "status": "passed"
+        },
+        {
+          "name": "test_wrap_content",
+          "status": "passed"
+        },
+        {
+          "name": "test_format_debug_table_empty",
+          "status": "passed"
+        },
+        {
+          "name": "test_format_debug_table_with_records",
+          "status": "passed"
+        }
+      ]
+    },
+    "live_goodmem_controlled_model": {
+      "counts": {
+        "passed": 5,
+        "failed": 3,
+        "error": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "name": "test_plugin_text_recall_in_fresh_session_and_other_user_isolation",
+          "status": "passed"
+        },
+        {
+          "name": "test_tools_save_fetch_in_fresh_session_and_other_user_isolation",
+          "status": "passed"
+        },
+        {
+          "name": "test_pdf_fact_reaches_fresh_session_without_original_attachment[plugin]",
+          "status": "passed"
+        },
+        {
+          "name": "test_pdf_fact_reaches_fresh_session_without_original_attachment[tools]",
+          "status": "passed"
+        },
+        {
+          "name": "test_plugin_and_tools_respect_separate_configured_space_names",
+          "status": "failed"
+        },
+        {
+          "name": "test_plugin_preserves_attachment_filename_in_model_context",
+          "status": "failed"
+        },
+        {
+          "name": "test_tools_keep_multiple_relevant_chunks_from_one_document",
+          "status": "failed"
+        },
+        {
+          "name": "test_internal_memory_service_with_native_load_memory_tool",
+          "status": "passed"
+        }
+      ]
+    },
+    "mock_http_faults": {
+      "counts": {
+        "passed": 3,
+        "failed": 6,
+        "error": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "name": "test_unknown_status_does_not_abort_real_adk_tool_call",
+          "status": "passed"
+        },
+        {
+          "name": "test_empty_search_is_one_request_and_returns_empty",
+          "status": "passed"
+        },
+        {
+          "name": "test_server_retrieval_failure_is_visible_to_the_agent",
+          "status": "failed"
+        },
+        {
+          "name": "test_partial_results_retain_failure_diagnostic",
+          "status": "failed"
+        },
+        {
+          "name": "test_malformed_stream_is_not_reported_as_clean_empty_result",
+          "status": "failed"
+        },
+        {
+          "name": "test_async_retrieval_does_not_block_other_sessions[plugin]",
+          "status": "failed"
+        },
+        {
+          "name": "test_async_retrieval_does_not_block_other_sessions[tools]",
+          "status": "failed"
+        },
+        {
+          "name": "test_failed_attachment_save_is_visible_to_agent",
+          "status": "failed"
+        },
+        {
+          "name": "test_invalid_credentials_tool_returns_visible_error",
+          "status": "passed"
+        }
+      ]
+    },
+    "real_cohere_text": {
+      "counts": {
+        "passed": 2,
+        "failed": 0,
+        "error": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "name": "test_provider_recalls_exact_random_fact_in_new_session[plugin]",
+          "status": "passed"
+        },
+        {
+          "name": "test_provider_recalls_exact_random_fact_in_new_session[tools]",
+          "status": "passed"
+        }
+      ]
+    },
+    "real_cohere_pdf": {
+      "counts": {
+        "passed": 2,
+        "failed": 0,
+        "error": 0,
+        "skipped": 0
+      },
+      "cases": [
+        {
+          "name": "test_provider_answers_from_pdf_extracted_by_goodmem[plugin]",
+          "status": "passed"
+        },
+        {
+          "name": "test_provider_answers_from_pdf_extracted_by_goodmem[tools]",
+          "status": "passed"
+        }
+      ]
+    },
+    "original_live_with_cohere": {
+      "counts": {
+        "passed": 13,
+        "failed": 0,
+        "error": 0,
+        "skipped": 2
+      },
+      "cases": [
+        {
+          "name": "test_goldfish_memory_across_sessions",
+          "status": "passed"
+        },
+        {
+          "name": "test_pdf_receipt_memory_across_sessions",
+          "status": "skipped"
+        },
+        {
+          "name": "test_goldfish_memory_via_tools",
+          "status": "passed"
+        },
+        {
+          "name": "test_pdf_receipt_memory_via_tools",
+          "status": "skipped"
+        },
+        {
+          "name": "test_a2_space_id_only_pre_created",
+          "status": "passed"
+        },
+        {
+          "name": "test_a3_space_id_and_name_both_match",
+          "status": "passed"
+        },
+        {
+          "name": "test_b1_name_then_id",
+          "status": "passed"
+        },
+        {
+          "name": "test_b2_plugin_writes_tools_read_same_name",
+          "status": "passed"
+        },
+        {
+          "name": "test_b3_plugin_writes_tools_read_via_id",
+          "status": "passed"
+        },
+        {
+          "name": "test_c1_space_id_nonexistent",
+          "status": "passed"
+        },
+        {
+          "name": "test_c2_space_id_and_name_mismatch",
+          "status": "passed"
+        },
+        {
+          "name": "test_d1_embedder_id_valid",
+          "status": "passed"
+        },
+        {
+          "name": "test_d2_embedder_id_nonexistent",
+          "status": "passed"
+        },
+        {
+          "name": "test_e1_space_name_env_var",
+          "status": "passed"
+        },
+        {
+          "name": "test_e2_space_id_env_var",
+          "status": "passed"
+        }
+      ]
+    }
+  }
+}

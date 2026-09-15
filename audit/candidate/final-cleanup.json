@@ -1,0 +1,125 @@
+{
+  "resources": [
+    {
+      "space_id": "01a0a52c-6f6d-7582-9319-fc4039c6ae95",
+      "name": "adk_chat_user_d67086f9f0f5",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-7efe-735e-b590-ad9617903315",
+      "name": "adk_chat_otheruser_2fb09d30f53d",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-7feb-776b-af75-621c17985319",
+      "name": "adk_tool_user_44116382d889",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-8b28-7165-baa4-524a3e66c6f4",
+      "name": "adk_tool_otheruser_c49dabe0f877",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-8bfb-76b5-8d4b-b0f0c0fc6823",
+      "name": "adk_chat_pdfuser_51840012794d",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-973b-7585-b6ff-a1a98d12b919",
+      "name": "adk_tool_pdfuser_e9294ad455eb",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-a3e7-76ce-83c7-367af0c9992a",
+      "name": "pluginspace_13513ec5b30b",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-a704-774f-8045-9dd1f6b07360",
+      "name": "toolspace_4e469245f4cf",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-a7fd-73ea-8674-b108d80dd53e",
+      "name": "adk_audit_820b206acac6",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-adae-743a-9380-9ed793c3789d",
+      "name": "adk_audit_e4c6e5ac425e",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-ba30-77f3-a53b-bf0737eccef4",
+      "name": "adk_memory_auditapp_b0e17f3fbd2f_user_17d61acd0dbe",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-c6d2-7273-a9e5-26eba987edbe",
+      "name": "adk_memory_auditapp_b0e17f3fbd2f_other_60bdf3ad1f8c",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-c76f-7045-aa51-16e533a93ddb",
+      "name": "adk_memory_otherapp_2e6ef8330ee3_user_17d61acd0dbe",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-c85f-72f6-8a3a-b60f4bc9469e",
+      "name": "shared_3040131f6a6a",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-d10b-736f-b28e-c38fd1e6b4f7",
+      "name": "shared_ea79ed11f5ce",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-de6d-7210-91a9-0cce2f779d22",
+      "name": "shared_da1aa390b3fb",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-e8fa-74c7-826b-4bfa6e65405a",
+      "name": "shared_82cec2d82e04",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52c-f687-747f-8b77-7e636ccf53fc",
+      "name": "shared_bce7e3f3744c",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52d-0128-764b-9670-67bc29089596",
+      "name": "adk_chat_realuser_6811304c3e9b",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52d-0e82-772c-8cac-851479e356da",
+      "name": "adk_chat_unrelateduser_38a1cbce9880",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52d-31cc-7748-8845-3e24241b7d0a",
+      "name": "adk_tool_realuser_531e7b9ab250",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52d-4cd2-7111-a719-45e045aaf253",
+      "name": "adk_tool_unrelateduser_2df6d945c51d",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52d-4fa7-73fb-a382-e124423317cb",
+      "name": "adk_audit_2c128b45aad8",
+      "verified_deleted": true
+    },
+    {
+      "space_id": "01a0a52d-5663-75be-8500-8248f476fe25",
+      "name": "adk_audit_33c3227f3910",
+      "verified_deleted": true
+    }
+  ],
+  "leftover_adk_test_spaces": []
+}

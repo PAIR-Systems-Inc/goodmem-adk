@@ -1,54 +1,28 @@
-# Copyright 2026 pairsys.ai (DBA Goodmem.ai)
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Example agent using Goodmem tools for explicit memory management.
-
-For usage instructions, see ../README.md.
-"""
+"""Run with adk run examples/goodmem_tools_demo; see examples/README.md."""
 
 import os
 
 from google.adk.agents import LlmAgent
 from google.adk.apps import App
-from goodmem_adk import GoodmemSaveTool, GoodmemFetchTool
 
-# Initialize Goodmem tools
-goodmem_save_tool = GoodmemSaveTool(
-    base_url=os.getenv("GOODMEM_BASE_URL"),
-    api_key=os.getenv("GOODMEM_API_KEY"),
-    embedder_id=os.getenv("GOODMEM_EMBEDDER_ID"),  # Optional, only needed if you wanna pin a specific embedder from multiple embedders
-    debug=False
-)
-goodmem_fetch_tool = GoodmemFetchTool(
-    base_url=os.getenv("GOODMEM_BASE_URL"),
-    api_key=os.getenv("GOODMEM_API_KEY"),
-    embedder_id=os.getenv("GOODMEM_EMBEDDER_ID"),  # Optional, only needed if you wanna pin a specific embedder from multiple embedders
-    top_k=5,  # Default number of memories to retrieve
-    debug=False
-)
+from goodmem_adk import GoodmemFetchTool, GoodmemSaveTool
 
-# Create root agent with Goodmem tools
+model_name = os.environ["ADK_MODEL"]
+if "/" in model_name:
+    from google.adk.models.lite_llm import LiteLlm
+
+    model = LiteLlm(model=model_name)
+else:
+    model = model_name
+
 root_agent = LlmAgent(
-    model='gemini-2.5-flash',
-    name='goodmem_tools_agent',
-    description='A helpful assistant for user questions.',
-    instruction='Answer user questions to the best of your knowledge',
-    tools=[goodmem_save_tool, goodmem_fetch_tool]
+    name="assistant",
+    model=model,
+    instruction=(
+        "Save facts when asked to remember them. Before answering questions about saved facts, "
+        "call goodmem_fetch, even in a fresh conversation. Check tool results and report errors "
+        "honestly. Do not re-upload accepted writes when another attachment fails."
+    ),
+    tools=[GoodmemSaveTool(), GoodmemFetchTool()],
 )
-
-# Create App (this is what adk run looks for)
-app = App(
-    name='goodmem_tools_demo',
-    root_agent=root_agent,
-)
+app = App(name="goodmem_tools_demo", root_agent=root_agent)

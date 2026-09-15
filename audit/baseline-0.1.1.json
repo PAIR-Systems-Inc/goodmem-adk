@@ -1,0 +1,22 @@
+{
+  "package": "goodmem-adk==0.1.1",
+  "original_test_commit": "c9745e336a9d675a4c8da24ace38ea0c6556165e",
+  "audit_date": "2026-09-15",
+  "files_sha256": {
+    "original/pyproject.toml": "03ff0f2649cb79a41fa9675c448e226658a17bcf56b90bab7cd75a3dedf2d6cd",
+    "original/tests/__init__.py": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "original/tests/conftest.py": "c749ff7e38ea647f79680272915b01b64e785f204098686c890cc33ee59d289c",
+    "original/tests/test_client.py": "21d4506ccdd042458914fda4de5ef7a9bc0f9252a6dd7dc05ea88603f2ed624f",
+    "original/tests/test_integration.py": "32fc2c0b8038dde2cbffae30ed6bf7181373e3987c2a0d1090f069c7da52dce8",
+    "original/tests/test_memory.py": "12f3ba74ff81e5ee6a9678e774c158277c569e982316ad6cf6bf9efd280e80d8",
+    "original/tests/test_optional_env_vars.py": "eb7fc958f19a4731a130081937bc4c77b43a53786f0b539c452788691af8dc7c",
+    "original/tests/test_plugin.py": "9047fb6b864fd403daf26282f8f7e812d7fe13038c8141d0a4afedcf36b5e286",
+    "original/tests/test_tools.py": "43d372b9c13b3c4a7f5c92f2fa008d25b85907796382842cf6f2009f50444547",
+    "reproductions/conftest.py": "b23bdf405555054627817ec04678b58176328fe6f775cff1112a2d65dbc3c8e9",
+    "reproductions/support.py": "df53868c6f2425c37ab08ff889c4fc67bb775ae34ef262462f37557dd266d26b",
+    "reproductions/test_http_boundaries.py": "a44f03be94853b1df8a1c27afb96445cdc75305c7a49ccca6c47d4b21a7d9486",
+    "reproductions/test_live_journeys.py": "7b60296bc3485ee2d758523774d50a06982dfa78fb26cc39cb72f27464d35e08",
+    "reproductions/test_real_model.py": "d45415a85fd07caf2d67e92d38fc4d4351e7f7557bf93c3fe1a2c2a76afeb7cd"
+  },
+  "archive_sha256": "df8d94ca1543d6e04142fab0baefa16cec44b4a06e446c046f4ed60128244e93"
+}

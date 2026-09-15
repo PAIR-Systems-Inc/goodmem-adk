@@ -1,0 +1,35 @@
+{
+  "verified": [
+    {
+      "space_id": "01a0a543-6471-7682-88d9-10064fafe0a0",
+      "name": "adk_chat_pdfuser_15ea87d8ce23",
+      "deleted": true
+    },
+    {
+      "space_id": "01a0a543-72a8-7545-afbc-15d234b11f9c",
+      "name": "adk_tool_pdfuser_3eb8f1b143c6",
+      "deleted": true
+    },
+    {
+      "space_id": "01a0a543-7b7e-74d9-b76c-8008510bbe21",
+      "name": "adk_audit_809b1698f7f3",
+      "deleted": true
+    },
+    {
+      "space_id": "01a0a543-86c6-738a-a874-f8e93ee84b80",
+      "name": "adk_memory_auditapp_5db7c8e1e07c_user_e68f892f13d4",
+      "deleted": true
+    },
+    {
+      "space_id": "01a0a543-929e-723b-8671-55eb42c099fa",
+      "name": "adk_memory_auditapp_5db7c8e1e07c_other_63b3970a618b",
+      "deleted": true
+    },
+    {
+      "space_id": "01a0a543-93c6-736b-b9a9-8555a7e2b344",
+      "name": "adk_memory_otherapp_bb8a7d651afa_user_e68f892f13d4",
+      "deleted": true
+    }
+  ],
+  "remaining_adk_test_spaces": []
+}

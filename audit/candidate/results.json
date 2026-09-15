@@ -1,0 +1,54 @@
+{
+  "Python 3.13 installed wheel": {
+    "tests": 63,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "Python 3.10 installed wheel": {
+    "tests": 63,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "sdk": "goodmem==0.1.34",
+  "framework": "google-adk==2.9.0",
+  "model": "cohere_chat/command-a-03-2025",
+  "production_lines_before": 3548,
+  "production_lines_after": 962,
+  "readme_words": 399,
+  "journaled_spaces_verified_deleted": 24,
+  "remaining_adk_test_spaces": 0,
+  "Live GoodMem maintainability follow-up": {
+    "tests": 4,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "Frozen 0.1.1 unit replay (known failure expected)": {
+    "tests": 113,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  },
+  "Frozen 0.1.1 HTTP replay (known failures expected)": {
+    "tests": 9,
+    "failures": 6,
+    "errors": 0,
+    "skipped": 0
+  },
+  "Live GoodMem and Cohere (prior full candidate run)": {
+    "tests": 18,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "maintainability_spaces_verified_deleted": 6,
+  "Live GoodMem and Cohere (latest full run with two new journeys)": {
+    "tests": 20,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "extra_e2e_spaces_verified_deleted": 27
+}

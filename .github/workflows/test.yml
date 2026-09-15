@@ -1,0 +1,104 @@
+name: Test integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 8 * * 1'
+  workflow_dispatch:
+    inputs:
+      live:
+        description: Run live GoodMem and model conversations using repository test secrets
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.13']
+    env:
+      OTEL_SDK_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install '.[dev,live]'
+      - run: ruff check goodmem_adk tests examples
+      - run: ruff format --check goodmem_adk tests examples
+      - run: mypy goodmem_adk
+      - run: python -m build
+      - name: Check distribution contents and rebuild source archive
+        run: |
+          python - <<'PY'
+          import tarfile
+          import zipfile
+          from pathlib import Path
+          with zipfile.ZipFile(next(Path('dist').glob('*.whl'))) as archive:
+              names = archive.namelist()
+              assert 'goodmem_adk/py.typed' in names
+              assert any(name.endswith('/licenses/LICENSE') for name in names)
+              assert all(name.startswith('goodmem_adk/') or '.dist-info/' in name for name in names)
+          with tarfile.open(next(Path('dist').glob('*.tar.gz'))) as archive:
+              assert not any('/audit/' in name for name in archive.getnames())
+          PY
+          python -m pip wheel --no-deps dist/*.tar.gz --wheel-dir /tmp/rebuilt-wheel
+      - name: Test the installed wheel outside the source checkout
+        run: |
+          python -m pip install --force-reinstall --no-deps dist/*.whl
+          TEST_DIR=$(mktemp -d)
+          cp -R tests examples README.md CHANGELOG.md pyproject.toml "$TEST_DIR/"
+          cd "$TEST_DIR"
+          python - <<'PY'
+          from pathlib import Path
+          import goodmem_adk
+          assert not Path(goodmem_adk.__file__).is_relative_to(Path.cwd())
+          PY
+          python -m pytest -m 'not integration' --disable-socket --allow-unix-socket
+
+  live:
+    if: github.event_name == 'workflow_dispatch' && inputs.live
+    runs-on: ubuntu-latest
+    env:
+      GOODMEM_TEST_LIVE: '1'
+      GOODMEM_TEST_BASE_URL: ${{ secrets.GOODMEM_TEST_BASE_URL }}
+      GOODMEM_TEST_API_KEY: ${{ secrets.GOODMEM_TEST_API_KEY }}
+      GOODMEM_TEST_EMBEDDER_ID: ${{ secrets.GOODMEM_TEST_EMBEDDER_ID }}
+      GOODMEM_TEST_MODEL: ${{ vars.GOODMEM_TEST_MODEL }}
+      COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      GOODMEM_TEST_EVIDENCE: /tmp/cleanup.jsonl
+      GOODMEM_TEST_MODEL_EVIDENCE: /tmp/model.jsonl
+      GOODMEM_TEST_RESOURCE_JOURNAL: /tmp/resources.jsonl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Require live test configuration
+        run: |
+          python - <<'PY'
+          import os
+          required = ['GOODMEM_TEST_BASE_URL', 'GOODMEM_TEST_API_KEY',
+                      'GOODMEM_TEST_EMBEDDER_ID', 'GOODMEM_TEST_MODEL']
+          missing = [name for name in required if not os.environ.get(name)]
+          if missing:
+              raise SystemExit('Missing live configuration: ' + ', '.join(missing))
+          PY
+      - run: python -m pip install '.[dev,live]'
+      - run: python -m pytest -m integration --junitxml=/tmp/live.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-results
+          path: |
+            /tmp/live.xml
+            /tmp/cleanup.jsonl
+            /tmp/model.jsonl
+            /tmp/resources.jsonl

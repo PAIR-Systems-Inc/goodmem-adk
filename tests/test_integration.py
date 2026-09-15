@@ -1,732 +1,257 @@
-# Copyright 2026 pairsys.ai (DBA Goodmem.ai)
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""Integration tests for GoodmemPlugin and GoodmemSaveTool/GoodmemFetchTool.
-
-These tests require a live Goodmem server and valid API keys.  They are
-skipped automatically when the required environment variables are not set.
-
-Run with::
-
-    GOODMEM_BASE_URL=http://localhost:8080 \
-    GOODMEM_API_KEY=<key> \
-    GOOGLE_API_KEY=<key> \
-    pytest tests/test_integration.py -v
-
-Either GOOGLE_API_KEY or GEMINI_API_KEY can be used for Gemini authentication.
-"""
-
-from __future__ import annotations
-
-import asyncio
-import os
-import time
-import uuid
-from typing import List
+"""Real ADK + published plugin + live GoodMem; model boundary is deterministic."""
 
 import pytest
-from google.adk.agents import LlmAgent
-from google.adk.apps.app import App
-from google.adk.runners import InMemoryRunner
+from fpdf import FPDF
+from goodmem import AsyncGoodmem
+from google.adk.events import Event
+from google.adk.sessions import Session
+from google.adk.tools.load_memory_tool import load_memory_tool
 from google.genai import types
 
-from goodmem_adk import (
-    GoodmemClient,
-    GoodmemFetchTool,
-    GoodmemPlugin,
-    GoodmemSaveTool,
-)
+from goodmem_adk import GoodmemFetchTool, GoodmemPlugin, GoodmemSaveTool
+from goodmem_adk.memory import GoodmemMemoryService
+from tests.support import all_text, responses, runner_for, text_content, turn, unique
 
-# ---------------------------------------------------------------------------
-# Skip the entire module when required env vars are missing
-# ---------------------------------------------------------------------------
-
-_HAS_GOOGLE_KEY = bool(os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY"))
-
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.asyncio,
-    pytest.mark.skipif(
-        not (os.getenv("GOODMEM_BASE_URL") and os.getenv("GOODMEM_API_KEY")
-             and _HAS_GOOGLE_KEY),
-        reason=(
-            "Integration tests require GOODMEM_BASE_URL, GOODMEM_API_KEY, "
-            "and GOOGLE_API_KEY (or GEMINI_API_KEY) environment variables"
-        ),
-    ),
-]
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_BASE_URL = os.getenv("GOODMEM_BASE_URL", "http://localhost:8080")
-_API_KEY = os.getenv("GOODMEM_API_KEY", "")
-
-# Time to wait (seconds) for Goodmem to index the embedding after insert.
-_INDEX_WAIT = 5
-# PDF text-extraction + embedding takes longer than plain text.
-_INDEX_WAIT_PDF = 8
+pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 
 
-def _unique_name(prefix: str) -> str:
-    """Return a collision-free space name for this test run."""
-    return f"{prefix}_{uuid.uuid4().hex[:8]}"
+async def test_plugin_text_recall_in_fresh_session_and_other_user_isolation(live):
+    plugin = GoodmemPlugin(**live.config)
+    runner, model = runner_for(plugin=plugin)
+    user = unique("user")
+    token = unique("orchid")
+    try:
+        await turn(runner, user, f"My project recovery phrase is {token}.")
+        await live.wait_for_writes()
+        await turn(runner, user, "What is my project recovery phrase?")
+        assert token in all_text(model.requests[-1].contents)
+        await turn(runner, unique("otheruser"), "What is my project recovery phrase?")
+        assert token not in all_text(model.requests[-1].contents)
+    finally:
+        await runner.close()
 
 
-def _extract_final_response(events: list) -> str:
-    """Walk runner events and return the last model text response."""
-    text_parts: List[str] = []
-    for event in events:
-        content = getattr(event, "content", None)
-        if content is None:
-            continue
-        author = getattr(event, "author", None)
-        # Only look at model / agent responses, skip user echoes
-        if author == "user":
-            continue
-        parts = getattr(content, "parts", None)
-        if not parts:
-            continue
-        for part in parts:
-            if getattr(part, "text", None):
-                text_parts.append(part.text)
-    return " ".join(text_parts)
-
-
-def _find_space_id(client: GoodmemClient, space_name: str) -> str | None:
-    """Look up a space by name and return its ID."""
-    spaces = client.list_spaces(name=space_name)
-    for space in spaces:
-        if space.get("name") == space_name:
-            return space.get("spaceId")
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Shared cleanup fixture
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def cleanup_spaces():
-    """Collect space IDs during the test and delete them in teardown."""
-    space_ids: List[str] = []
-    yield space_ids
-    client = GoodmemClient(_BASE_URL, _API_KEY)
-    for sid in space_ids:
-        try:
-            client.delete_space(sid)
-        except Exception:
-            pass
-    client.close()
-
-
-# ---------------------------------------------------------------------------
-# Plugin integration test
-# ---------------------------------------------------------------------------
-
-
-class TestPluginIntegration:
-    """End-to-end test: GoodmemPlugin stores and recalls a fact across
-    two separate ADK sessions using a real Goodmem backend and Gemini LLM.
-    """
-
-    async def test_goldfish_memory_across_sessions(
-        self, cleanup_spaces: List[str]
-    ) -> None:
-        space_name = _unique_name("integ_plugin")
-
-        # -- build the agent + plugin + runner ---------------------------------
-        agent = LlmAgent(
-            model="gemini-2.5-flash",
-            name="integ_plugin_agent",
-            description="A helpful assistant.",
-            instruction=(
-                "You are a helpful assistant. Answer questions about the user "
-                "based on what you know."
-            ),
+async def test_tools_save_fetch_in_fresh_session_and_other_user_isolation(live):
+    runner, _ = runner_for(tools=[GoodmemSaveTool(**live.config), GoodmemFetchTool(**live.config)])
+    user = unique("user")
+    token = unique("willow")
+    try:
+        _, saved_events = await turn(runner, user, f"SAVE: My parcel password is {token}.")
+        saved = responses(saved_events, "goodmem_save")
+        assert saved and saved[0]["success"] and saved[0]["memory_id"]
+        await live.wait_for_writes()
+        _, fetched_events = await turn(runner, user, "FETCH: What is my parcel password?")
+        fetched = responses(fetched_events, "goodmem_fetch")
+        assert fetched and fetched[0]["success"] and token in all_text(fetched)
+        _, other_events = await turn(
+            runner, unique("otheruser"), "FETCH: What is my parcel password?"
         )
+        assert token not in all_text(responses(other_events, "goodmem_fetch"))
+    finally:
+        await runner.close()
 
-        plugin = GoodmemPlugin(
-            base_url=_BASE_URL,
-            api_key=_API_KEY,
-            space_name=space_name,
-            top_k=5,
-            debug=True,
-        )
 
-        app = App(
-            name="integ_plugin_app",
-            root_agent=agent,
-            plugins=[plugin],
-        )
-
-        runner = InMemoryRunner(app=app)
-
-        # -- Session 1: tell the agent a fact ----------------------------------
-        session1 = await runner.session_service.create_session(
-            app_name=app.name, user_id="goldfish_user"
-        )
-
-        print(f"\n{'=' * 72}")
-        print(f"[INTEG] SESSION 1  (id={session1.id})")
-        print(f"{'=' * 72}")
-
-        msg1 = types.Content(
-            role="user",
-            parts=[types.Part(text="I am a goldfish")],
-        )
-        events1 = []
-        async for event in runner.run_async(
-            user_id="goldfish_user",
-            session_id=session1.id,
-            new_message=msg1,
-        ):
-            events1.append(event)
-
-        response1 = _extract_final_response(events1)
-        print(f"[INTEG] Session 1 response: {response1}")
-        assert response1, "Session 1 should produce a model response"
-
-        # -- Wait for Goodmem indexing -----------------------------------------
-        print(f"\n{'- ' * 36}")
-        print(f"[INTEG] Waiting {_INDEX_WAIT}s for Goodmem indexing...")
-        print(f"{'- ' * 36}")
-        time.sleep(_INDEX_WAIT)
-
-        # -- Session 2: ask a question that requires the goldfish memory -------
-        session2 = await runner.session_service.create_session(
-            app_name=app.name, user_id="goldfish_user"
-        )
-
-        print(f"\n{'=' * 72}")
-        print(f"[INTEG] SESSION 2  (id={session2.id})")
-        print(f"{'=' * 72}")
-
-        msg2 = types.Content(
-            role="user",
-            parts=[types.Part(text="Do I live in water?")],
-        )
-        events2 = []
-        async for event in runner.run_async(
-            user_id="goldfish_user",
-            session_id=session2.id,
-            new_message=msg2,
-        ):
-            events2.append(event)
-
-        response2 = _extract_final_response(events2)
-        print(f"[INTEG] Session 2 response: {response2}")
-
-        # -- Assertions --------------------------------------------------------
-        response_lower = response2.lower()
-        recall_keywords = ["water", "goldfish", "fish", "aquatic", "aquarium"]
-        assert any(kw in response_lower for kw in recall_keywords), (
-            f"Expected the LLM to recall the goldfish fact. "
-            f"Got: {response2}"
-        )
-
-        # -- Also verify retrieval directly ------------------------------------
-        client = GoodmemClient(_BASE_URL, _API_KEY)
-        space_id = _find_space_id(client, space_name)
-        assert space_id is not None, (
-            f"Space '{space_name}' should have been auto-created"
-        )
-        cleanup_spaces.append(space_id)
-
-        chunks = client.retrieve_memories(
-            "Do I live in water?", [space_id], request_size=5
-        )
-        chunk_texts = []
-        for item in chunks:
-            try:
-                text = (
-                    item["retrievedItem"]["chunk"]["chunk"]["chunkText"]
-                )
-                chunk_texts.append(text)
-            except (KeyError, TypeError):
-                pass
-
-        print(f"[INTEG] Retrieved chunks: {chunk_texts}")
-        assert any("goldfish" in t.lower() for t in chunk_texts), (
-            f"Expected to retrieve a chunk mentioning 'goldfish'. "
-            f"Got: {chunk_texts}"
-        )
-        client.close()
-
-    async def test_pdf_receipt_memory_across_sessions(
-        self, cleanup_spaces: List[str], mock_receipt_pdf: bytes
-    ) -> None:
-        """Upload a PDF receipt in session 1, then verify that session 2 can
-        recall details (Acme's address) that were *only* in the PDF and never
-        mentioned in the conversation text.
-        """
-        space_name = _unique_name("integ_plugin_pdf")
-
-        # -- build the agent + plugin + runner ---------------------------------
-        agent = LlmAgent(
-            model="gemini-2.5-flash",
-            name="integ_plugin_pdf_agent",
-            description="A helpful assistant.",
-            instruction=(
-                "You are a helpful assistant. Answer questions based on what "
-                "you know, including any documents or memories you have access to."
-            ),
-        )
-
-        plugin = GoodmemPlugin(
-            base_url=_BASE_URL,
-            api_key=_API_KEY,
-            space_name=space_name,
-            top_k=5,
-            debug=True,
-        )
-
-        app = App(
-            name="integ_plugin_pdf_app",
-            root_agent=agent,
-            plugins=[plugin],
-        )
-
-        runner = InMemoryRunner(app=app)
-
-        # -- Session 1: send PDF + ask about total -----------------------------
-        session1 = await runner.session_service.create_session(
-            app_name=app.name, user_id="receipt_user"
-        )
-
-        print(f"\n{'=' * 72}")
-        print(f"[INTEG-PDF] SESSION 1  (id={session1.id})")
-        print(f"{'=' * 72}")
-
-        msg1 = types.Content(
+@pytest.mark.parametrize("path", ["plugin", "tools"])
+async def test_pdf_fact_reaches_fresh_session_without_original_attachment(live, path):
+    token = unique("warehouse")
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=12)
+    pdf.multi_cell(0, 8, f"Parcel receipt. Warehouse access code: {token}. Total: 712.34 dollars.")
+    plugin = GoodmemPlugin(**live.config) if path == "plugin" else None
+    tool_list = (
+        [GoodmemSaveTool(**live.config), GoodmemFetchTool(**live.config)] if path == "tools" else []
+    )
+    runner, model = runner_for(plugin=plugin, tools=tool_list)
+    user = unique("pdfuser")
+    try:
+        message = types.Content(
             role="user",
             parts=[
-                types.Part(text=(
-                    "In the attached receipt, how much did GoodMind pay Acme?"
-                )),
                 types.Part(
-                    inline_data=types.Blob(
-                        data=mock_receipt_pdf,
-                        mime_type="application/pdf",
-                    )
+                    text="SAVE: Store this receipt." if path == "tools" else "Store this receipt."
+                ),
+                types.Part(
+                    inline_data=types.Blob(mime_type="application/pdf", data=bytes(pdf.output()))
                 ),
             ],
         )
-        events1 = []
-        async for event in runner.run_async(
-            user_id="receipt_user",
-            session_id=session1.id,
-            new_message=msg1,
-        ):
-            events1.append(event)
-
-        response1 = _extract_final_response(events1)
-        print(f"[INTEG-PDF] Session 1 response: {response1}")
-        assert response1, "Session 1 should produce a model response"
-
-        # Verify the LLM answered with the correct total
-        assert "4,225.50" in response1 or "4225.50" in response1 or "4225" in response1, (
-            f"Expected session 1 response to mention the receipt total. "
-            f"Got: {response1}"
+        _, events = await turn(runner, user, message)
+        if path == "tools":
+            assert responses(events, "goodmem_save")[0]["attachments_saved"] == 1
+        assert any(w["contentType"] == "application/pdf" for w in live.writes)
+        await live.wait_for_writes()
+        _, events = await turn(
+            runner,
+            user,
+            ("FETCH: " if path == "tools" else "") + "What is the warehouse access code?",
         )
-
-        # -- Wait for Goodmem PDF indexing -------------------------------------
-        print(f"\n{'- ' * 36}")
-        print(f"[INTEG-PDF] Waiting {_INDEX_WAIT_PDF}s for Goodmem PDF indexing...")
-        print(f"{'- ' * 36}")
-        time.sleep(_INDEX_WAIT_PDF)
-
-        # -- Session 2: ask about Acme's address (never mentioned in session 1)
-        session2 = await runner.session_service.create_session(
-            app_name=app.name, user_id="receipt_user"
+        observed = (
+            responses(events, "goodmem_fetch") if path == "tools" else model.requests[-1].contents
         )
+        assert token in all_text(observed)
+    finally:
+        await runner.close()
 
-        print(f"\n{'=' * 72}")
-        print(f"[INTEG-PDF] SESSION 2  (id={session2.id})")
-        print(f"{'=' * 72}")
 
-        msg2 = types.Content(
-            role="user",
-            parts=[types.Part(text="What's the address of Acme?")],
+async def test_plugin_and_tools_respect_separate_configured_space_names(live):
+    plugin_name = unique("pluginspace")
+    tool_name = unique("toolspace")
+    plugin = GoodmemPlugin(**live.config, space_name=plugin_name)
+    runner, _ = runner_for(
+        plugin=plugin, tools=[GoodmemSaveTool(**live.config, space_name=tool_name)]
+    )
+    try:
+        _, events = await turn(
+            runner, unique("user"), "SAVE: Put this note in the configured tools space."
         )
-        events2 = []
-        async for event in runner.run_async(
-            user_id="receipt_user",
-            session_id=session2.id,
-            new_message=msg2,
-        ):
-            events2.append(event)
-
-        response2 = _extract_final_response(events2)
-        print(f"[INTEG-PDF] Session 2 response: {response2}")
-
-        # -- Assertions: session 2 should recall Acme's address from PDF -------
-        response_lower = response2.lower()
-        address_keywords = [
-            "innovation drive", "san francisco", "94105", "123",
-        ]
-        assert any(kw in response_lower for kw in address_keywords), (
-            f"Expected the LLM to recall Acme's address from the PDF receipt. "
-            f"Got: {response2}"
+        assert responses(events, "goodmem_save")[0]["success"]
+        assert tool_name in live.spaces.values(), (
+            "Tool reused the plugin's cached space instead of its configured space_name",
+            live.spaces,
         )
+    finally:
+        await runner.close()
 
-        # -- Direct retrieval check --------------------------------------------
-        client = GoodmemClient(_BASE_URL, _API_KEY)
-        space_id = _find_space_id(client, space_name)
-        assert space_id is not None, (
-            f"Space '{space_name}' should have been auto-created"
+
+async def test_plugin_preserves_attachment_filename_in_model_context(live):
+    sid = live.new_space()
+    filename = unique("audit_source") + ".txt"
+    response = live.http.post(
+        "/v1/memories",
+        json={
+            "spaceId": sid,
+            "originalContent": "The audit source describes orchid delivery.",
+            "contentType": "text/plain",
+            "metadata": {"filename": filename, "role": "user"},
+        },
+    )
+    response.raise_for_status()
+    await live.wait_for_writes()
+    plugin = GoodmemPlugin(**live.config, space_id=sid)
+    runner, model = runner_for(plugin=plugin)
+    try:
+        await turn(runner, unique("user"), "What does the audit source describe?")
+        assert "orchid delivery" in all_text(model.requests[-1].contents)
+        assert filename in all_text(model.requests[-1].contents)
+    finally:
+        await runner.close()
+
+
+async def test_tools_keep_multiple_relevant_chunks_from_one_document(live):
+    sid = live.new_space(chunk_size=100)
+    token_a, token_b = unique("alpha"), unique("beta")
+    content = (
+        f"The first required delivery password is {token_a}.\n\n"
+        + "Background filler. " * 14
+        + f"\n\nThe second required delivery password is {token_b}."
+    )
+    response = live.http.post(
+        "/v1/memories",
+        json={
+            "spaceId": sid,
+            "originalContent": content,
+            "contentType": "text/plain",
+        },
+    )
+    response.raise_for_status()
+    await live.wait_for_writes()
+    async with AsyncGoodmem(base_url=live.base_url, api_key=live.api_key) as client:
+        chunks = await client.memories.retrieve(
+            message="required delivery passwords", space_ids=[sid], requested_size=20, stream=False
         )
-        cleanup_spaces.append(space_id)
-
-        chunks = client.retrieve_memories(
-            "Acme address", [space_id], request_size=5
-        )
-        chunk_texts = []
-        for item in chunks:
-            try:
-                text = (
-                    item["retrievedItem"]["chunk"]["chunk"]["chunkText"]
-                )
-                chunk_texts.append(text)
-            except (KeyError, TypeError):
-                pass
-
-        print(f"[INTEG-PDF] Retrieved chunks: {chunk_texts}")
-        assert any(
-            "acme" in t.lower() or "innovation" in t.lower()
-            for t in chunk_texts
-        ), (
-            f"Expected to retrieve a chunk mentioning 'Acme' or 'Innovation'. "
-            f"Got: {chunk_texts}"
-        )
-        client.close()
+        assert token_a in all_text(chunks) and token_b in all_text(chunks)
+    runner, _ = runner_for(tools=[GoodmemFetchTool(**live.config, space_id=sid, top_k=20)])
+    try:
+        _, events = await turn(runner, unique("user"), "FETCH: required delivery passwords")
+        fetched = responses(events, "goodmem_fetch")
+        assert token_a in all_text(fetched) and token_b in all_text(fetched), fetched
+    finally:
+        await runner.close()
 
 
-# ---------------------------------------------------------------------------
-# Tools integration test
-# ---------------------------------------------------------------------------
-
-
-class TestToolsIntegration:
-    """End-to-end test: GoodmemSaveTool/GoodmemFetchTool store and recall
-    a fact across two separate ADK sessions.
-    """
-
-    async def test_goldfish_memory_via_tools(
-        self, cleanup_spaces: List[str]
-    ) -> None:
-        space_name = _unique_name("integ_tools")
-
-        # -- build the agent + tools + runner ----------------------------------
-        save_tool = GoodmemSaveTool(
-            base_url=_BASE_URL,
-            api_key=_API_KEY,
-            space_name=space_name,
-            debug=True,
-        )
-        fetch_tool = GoodmemFetchTool(
-            base_url=_BASE_URL,
-            api_key=_API_KEY,
-            space_name=space_name,
-            top_k=5,
-            debug=True,
-        )
-
-        agent = LlmAgent(
-            model="gemini-2.5-flash",
-            name="integ_tools_agent",
-            description="A helpful assistant with memory tools.",
-            instruction=(
-                "You have access to memory tools. "
-                "When the user tells you something about themselves, ALWAYS "
-                "save it using the goodmem_save tool. "
-                "When the user asks a question about themselves, ALWAYS use "
-                "the goodmem_fetch tool first to check what you know."
+async def test_internal_memory_service_with_native_load_memory_tool(live):
+    service = GoodmemMemoryService(**live.config)
+    runner, _ = runner_for(tools=[load_memory_tool])
+    runner.memory_service = service
+    user, token = unique("user"), unique("cedar")
+    session = Session(
+        app_name=runner.app_name,
+        user_id=user,
+        id=unique("session"),
+        events=[
+            Event(author="user", content=text_content(f"My reservation code is {token}.")),
+            Event(
+                author="audit_agent",
+                content=types.Content(role="model", parts=[types.Part(text="Acknowledged.")]),
             ),
-            tools=[save_tool, fetch_tool],
+        ],
+    )
+    try:
+        await service.add_session_to_memory(session)
+        count = len(live.writes)
+        await service.add_session_to_memory(session)
+        assert len(live.writes) == count, "Repeated session ingestion duplicated existing events"
+        await live.wait_for_writes()
+        _, events = await turn(runner, user, "LOAD: What is my reservation code?")
+        assert token in all_text(responses(events, "load_memory"))
+        other = await service.search_memory(
+            app_name=runner.app_name, user_id=unique("other"), query="reservation code"
         )
-
-        runner = InMemoryRunner(
-            agent=agent,
-            app_name="integ_tools_app",
+        assert token not in all_text(other)
+        other_app = await service.search_memory(
+            app_name=unique("otherapp"), user_id=user, query="reservation code"
         )
+        assert token not in all_text(other_app)
+    finally:
+        await runner.close()
+        await service.close()
 
-        # -- Session 1: tell the agent a fact ----------------------------------
-        session1 = await runner.session_service.create_session(
-            app_name="integ_tools_app", user_id="goldfish_user"
-        )
 
-        print(f"\n{'=' * 72}")
-        print(f"[INTEG] SESSION 1  (id={session1.id})")
-        print(f"{'=' * 72}")
+@pytest.mark.parametrize("scope", ["id", "name", "matching", "env-id", "env-name"])
+async def test_plugin_write_and_tool_read_share_only_the_configured_scope(live, monkeypatch, scope):
+    name = unique("shared")
+    options = {}
+    if scope in {"id", "matching", "env-id"}:
+        sid = live.new_space(name=name)
+        if scope == "env-id":
+            monkeypatch.setenv("GOODMEM_SPACE_ID", sid)
+        else:
+            options["space_id"] = sid
+    if scope in {"name", "matching"}:
+        options["space_name"] = name
+    if scope == "env-name":
+        monkeypatch.setenv("GOODMEM_SPACE_NAME", name)
+    # Omit embedder_id to exercise selection of an existing server embedder.
+    config = {"base_url": live.base_url, "api_key": live.api_key, **options}
+    fact = unique("shared_fact")
+    plugin_runner, _ = runner_for(plugin=GoodmemPlugin(**config))
+    tool_runner, _ = runner_for(tools=[GoodmemFetchTool(**config)])
+    try:
+        await turn(plugin_runner, "writer", f"The project launch code is {fact}.")
+        await live.wait_for_writes()
+        _, events = await turn(tool_runner, "reader", "FETCH: project launch code")
+        result = responses(events, "goodmem_fetch")[0]
+        assert result["success"] and fact in all_text(result)
+        assert list(live.spaces.values()).count(name) == 1
+    finally:
+        await plugin_runner.close()
+        await tool_runner.close()
 
-        msg1 = types.Content(
-            role="user",
-            parts=[types.Part(text="Remember this: I am a goldfish")],
-        )
-        events1 = []
-        async for event in runner.run_async(
-            user_id="goldfish_user",
-            session_id=session1.id,
-            new_message=msg1,
-        ):
-            events1.append(event)
 
-        response1 = _extract_final_response(events1)
-        print(f"[INTEG] Session 1 response: {response1}")
-
-        # Verify the save tool was invoked
-        save_called = False
-        for event in events1:
-            content = getattr(event, "content", None)
-            if content is None:
-                continue
-            parts = getattr(content, "parts", None)
-            if not parts:
-                continue
-            for part in parts:
-                fc = getattr(part, "function_call", None)
-                if fc and getattr(fc, "name", None) == "goodmem_save":
-                    save_called = True
-                    break
-        assert save_called, (
-            "Expected the LLM to call goodmem_save in session 1"
-        )
-
-        # -- Wait for Goodmem indexing -----------------------------------------
-        print(f"\n{'- ' * 36}")
-        print(f"[INTEG] Waiting {_INDEX_WAIT}s for Goodmem indexing...")
-        print(f"{'- ' * 36}")
-        time.sleep(_INDEX_WAIT)
-
-        # -- Session 2: ask a question that requires the goldfish memory -------
-        session2 = await runner.session_service.create_session(
-            app_name="integ_tools_app", user_id="goldfish_user"
-        )
-
-        print(f"\n{'=' * 72}")
-        print(f"[INTEG] SESSION 2  (id={session2.id})")
-        print(f"{'=' * 72}")
-
-        msg2 = types.Content(
-            role="user",
-            parts=[types.Part(text="Do I live in water?")],
-        )
-        events2 = []
-        async for event in runner.run_async(
-            user_id="goldfish_user",
-            session_id=session2.id,
-            new_message=msg2,
-        ):
-            events2.append(event)
-
-        response2 = _extract_final_response(events2)
-        print(f"[INTEG] Session 2 response: {response2}")
-
-        # Verify the fetch tool was invoked
-        fetch_called = False
-        for event in events2:
-            content = getattr(event, "content", None)
-            if content is None:
-                continue
-            parts = getattr(content, "parts", None)
-            if not parts:
-                continue
-            for part in parts:
-                fc = getattr(part, "function_call", None)
-                if fc and getattr(fc, "name", None) == "goodmem_fetch":
-                    fetch_called = True
-                    break
-        assert fetch_called, (
-            "Expected the LLM to call goodmem_fetch in session 2"
-        )
-
-        # -- Assertions --------------------------------------------------------
-        response_lower = response2.lower()
-        recall_keywords = ["water", "goldfish", "fish", "aquatic", "aquarium"]
-        assert any(kw in response_lower for kw in recall_keywords), (
-            f"Expected the LLM to recall the goldfish fact. "
-            f"Got: {response2}"
-        )
-
-        # -- Cleanup: find and register the space for deletion -----------------
-        client = GoodmemClient(_BASE_URL, _API_KEY)
-        space_id = _find_space_id(client, space_name)
-        if space_id:
-            cleanup_spaces.append(space_id)
-        client.close()
-
-    async def test_pdf_receipt_memory_via_tools(
-        self, cleanup_spaces: List[str], mock_receipt_pdf: bytes
-    ) -> None:
-        """Save a PDF receipt via the goodmem_save tool in session 1, then
-        verify that session 2 can fetch Acme's address (only present in the
-        PDF, never mentioned in conversation) via goodmem_fetch.
-        """
-        space_name = _unique_name("integ_tools_pdf")
-
-        # -- build the agent + tools + runner ----------------------------------
-        save_tool = GoodmemSaveTool(
-            base_url=_BASE_URL,
-            api_key=_API_KEY,
-            space_name=space_name,
-            debug=True,
-        )
-        fetch_tool = GoodmemFetchTool(
-            base_url=_BASE_URL,
-            api_key=_API_KEY,
-            space_name=space_name,
-            top_k=5,
-            debug=True,
-        )
-
-        agent = LlmAgent(
-            model="gemini-2.5-flash",
-            name="integ_tools_pdf_agent",
-            description="A helpful assistant with memory tools.",
-            instruction=(
-                "You have access to memory tools. "
-                "When the user asks you to save something, ALWAYS use the "
-                "goodmem_save tool. "
-                "When the user asks a question and says to check memory, "
-                "ALWAYS use the goodmem_fetch tool first."
-            ),
-            tools=[save_tool, fetch_tool],
-        )
-
-        runner = InMemoryRunner(
-            agent=agent,
-            app_name="integ_tools_pdf_app",
-        )
-
-        # -- Session 1: send PDF + ask to save it -----------------------------
-        session1 = await runner.session_service.create_session(
-            app_name="integ_tools_pdf_app", user_id="receipt_user"
-        )
-
-        print(f"\n{'=' * 72}")
-        print(f"[INTEG-PDF] SESSION 1  (id={session1.id})")
-        print(f"{'=' * 72}")
-
-        msg1 = types.Content(
-            role="user",
-            parts=[
-                types.Part(text=(
-                    "Save this receipt to memory and tell me the total amount."
-                )),
-                types.Part(
-                    inline_data=types.Blob(
-                        data=mock_receipt_pdf,
-                        mime_type="application/pdf",
-                    )
-                ),
-            ],
-        )
-        events1 = []
-        async for event in runner.run_async(
-            user_id="receipt_user",
-            session_id=session1.id,
-            new_message=msg1,
-        ):
-            events1.append(event)
-
-        response1 = _extract_final_response(events1)
-        print(f"[INTEG-PDF] Session 1 response: {response1}")
-
-        # Verify the save tool was invoked
-        save_called = False
-        for event in events1:
-            content = getattr(event, "content", None)
-            if content is None:
-                continue
-            parts = getattr(content, "parts", None)
-            if not parts:
-                continue
-            for part in parts:
-                fc = getattr(part, "function_call", None)
-                if fc and getattr(fc, "name", None) == "goodmem_save":
-                    save_called = True
-                    break
-        assert save_called, (
-            "Expected the LLM to call goodmem_save in session 1"
-        )
-
-        # -- Wait for Goodmem PDF indexing -------------------------------------
-        print(f"\n{'- ' * 36}")
-        print(f"[INTEG-PDF] Waiting {_INDEX_WAIT_PDF}s for Goodmem PDF indexing...")
-        print(f"{'- ' * 36}")
-        time.sleep(_INDEX_WAIT_PDF)
-
-        # -- Session 2: ask about Acme's address (never mentioned in session 1)
-        session2 = await runner.session_service.create_session(
-            app_name="integ_tools_pdf_app", user_id="receipt_user"
-        )
-
-        print(f"\n{'=' * 72}")
-        print(f"[INTEG-PDF] SESSION 2  (id={session2.id})")
-        print(f"{'=' * 72}")
-
-        msg2 = types.Content(
-            role="user",
-            parts=[types.Part(text=(
-                "What's the address of Acme? Check your memory."
-            ))],
-        )
-        events2 = []
-        async for event in runner.run_async(
-            user_id="receipt_user",
-            session_id=session2.id,
-            new_message=msg2,
-        ):
-            events2.append(event)
-
-        response2 = _extract_final_response(events2)
-        print(f"[INTEG-PDF] Session 2 response: {response2}")
-
-        # Verify the fetch tool was invoked
-        fetch_called = False
-        for event in events2:
-            content = getattr(event, "content", None)
-            if content is None:
-                continue
-            parts = getattr(content, "parts", None)
-            if not parts:
-                continue
-            for part in parts:
-                fc = getattr(part, "function_call", None)
-                if fc and getattr(fc, "name", None) == "goodmem_fetch":
-                    fetch_called = True
-                    break
-        assert fetch_called, (
-            "Expected the LLM to call goodmem_fetch in session 2"
-        )
-
-        # -- Assertions: session 2 should recall Acme's address from PDF -------
-        response_lower = response2.lower()
-        address_keywords = [
-            "innovation drive", "san francisco", "94105", "123",
+async def test_invalid_explicit_space_returns_an_error_without_creating_another(live):
+    runner, _ = runner_for(
+        tools=[
+            GoodmemFetchTool(
+                **live.config,
+                space_id="00000000-0000-0000-0000-000000000000",
+            )
         ]
-        assert any(kw in response_lower for kw in address_keywords), (
-            f"Expected the LLM to recall Acme's address from the PDF receipt. "
-            f"Got: {response2}"
-        )
-
-        # -- Cleanup: find and register the space for deletion -----------------
-        client = GoodmemClient(_BASE_URL, _API_KEY)
-        space_id = _find_space_id(client, space_name)
-        if space_id:
-            cleanup_spaces.append(space_id)
-        client.close()
+    )
+    try:
+        _, events = await turn(runner, unique("user"), "FETCH: missing space")
+        result = responses(events, "goodmem_fetch")[0]
+        assert not result["success"] and "404" in all_text(result["statuses"])
+        assert not live.spaces and not live.writes
+    finally:
+        await runner.close()
