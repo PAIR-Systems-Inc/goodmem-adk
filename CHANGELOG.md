@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.1 — 2026-09-25
+
+### Security
+
+- `space_id`, `embedder_id`, `GOODMEM_SPACE_ID` and `GOODMEM_EMBEDDER_ID` must be
+  UUIDs, as all GoodMem IDs are. Any other value raises `ValueError` naming the
+  setting when a plugin, tool or the internal service is constructed, and the space
+  ID is checked again immediately before it becomes `GET /v1/spaces/{id}`. No request
+  is sent. Previously the SDK placed the value into the URL as given and httpx
+  resolved dot segments: `space_id="../embedders/<id>"` requested
+  `GET /v1/embedders/<id>`, `"../spaces/<other>"` or `"a/../../spaces/<other>"`
+  resolved and then saved memories into `<other>`, and `"<id>?x=1"` added a query string.
+- Uppercase UUIDs are accepted and sent in lowercase. An empty `GOODMEM_EMBEDDER_ID`
+  is now refused, as an empty `GOODMEM_SPACE_ID` already was.
+- Model-facing tool arguments carry no IDs. ADK user and app names select default
+  scopes only through the `name_filter` query parameter and request bodies; a
+  regression test records every request target to confirm this.
+
 ## 0.2.0 — 2026-09-15
 
 This release uses the official `goodmem` SDK and native asynchronous requests.

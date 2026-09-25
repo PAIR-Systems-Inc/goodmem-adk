@@ -75,6 +75,9 @@ Defaults are `adk_tool_{user_id}` for tools and `adk_chat_{user_id}` for the
 plugin. Set the same `space_id` or `space_name` on both to share memory. Explicit
 scopes are shared by everyone using that configuration; defaults separate users,
 not applications. Explicit arguments override environment scope settings.
+`space_id`, `embedder_id`, `GOODMEM_SPACE_ID` and `GOODMEM_EMBEDDER_ID` must be
+GoodMem UUIDs; anything else is refused before a request is sent, because a space
+ID becomes part of a request URL where `../embedders/<id>` would reach another resource.
 
 Writes return accepted IDs and processing states. Indexing happens asynchronously;
 empty searches are never retried automatically. Failed attachments are reported

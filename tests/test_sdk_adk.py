@@ -192,8 +192,8 @@ async def test_environment_scope_used_when_no_explicit_scope(wire, monkeypatch, 
     "options",
     [
         {"space_id": SPACE_ID, "space_name": "wrong-name"},
-        {"space_id": "missing-space"},
-        {"space_id": SPACE_ID, "embedder_id": "wrong-embedder"},
+        {"space_id": "00000000-0000-4000-8000-0000000000ff"},
+        {"space_id": SPACE_ID, "embedder_id": "00000000-0000-4000-8000-0000000000fe"},
     ],
 )
 async def test_invalid_scope_fails_without_a_write(wire, options):
@@ -464,7 +464,8 @@ async def test_matching_space_can_be_on_a_later_sdk_page(wire):
 
 
 async def test_ambiguous_accessible_space_names_require_an_id(wire):
-    wire.spaces["another-id"] = space(spaceId="another-id")
+    another = "00000000-0000-4000-8000-0000000000fd"
+    wire.spaces[another] = space(spaceId=another)
     runner, _ = runner_for(tools=[GoodmemSaveTool(client=wire.client, space_name="test-space")])
     try:
         _, events = await turn(runner, "user", "SAVE: note")

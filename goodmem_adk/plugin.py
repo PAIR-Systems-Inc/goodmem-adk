@@ -22,8 +22,8 @@ class GoodmemPlugin(BasePlugin):
         base_url: GoodMem URL; defaults to GOODMEM_BASE_URL.
         api_key: GoodMem credential; defaults to GOODMEM_API_KEY.
         name: Unique ADK plugin name.
-        embedder_id: Embedder used when a named space must be created.
-        space_id: Explicit space ID. If a name is supplied it must match.
+        embedder_id: Embedder UUID used when a named space must be created.
+        space_id: Explicit space UUID. If a name is supplied it must match.
         space_name: Shared scope; otherwise defaults to adk_chat_{user_id}.
         top_k: Maximum chunks per retrieval, between 1 and 100.
         client: Caller-owned AsyncGoodmem SDK, instead of base_url/api_key.
