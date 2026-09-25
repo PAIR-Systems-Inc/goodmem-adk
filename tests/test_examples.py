@@ -101,3 +101,40 @@ async def test_migration_example_connects_with_explicit_environment_settings(wir
     assert requests
     assert all(request.url.host == "migration.test" for request in requests)
     assert all(request.headers["x-api-key"] == "migration-key" for request in requests)
+
+
+@pytest.mark.asyncio
+async def test_readme_names_every_model_facing_name_and_setting(wire):  # noqa: F811
+    """The README documents what the model sees and what the code reads, taken from the code."""
+    import goodmem_adk
+    from goodmem_adk import GoodmemFetchTool, GoodmemPlugin, GoodmemSaveTool
+
+    tools = [
+        GoodmemSaveTool(client=wire.client, embedder_id=EMBEDDER_ID),
+        GoodmemFetchTool(client=wire.client, embedder_id=EMBEDDER_ID),
+    ]
+    names = {tool.name for tool in tools}
+    arguments = {
+        name
+        for tool in tools
+        for name in (tool._get_declaration().parameters_json_schema or {}).get("properties", {})
+    }
+    runner, _ = runner_for(
+        plugin=GoodmemPlugin(client=wire.client, space_id=SPACE_ID), tools=tools[:1]
+    )
+    try:
+        await turn(runner, "readme-user", "SAVE: a note")
+    finally:
+        await runner.close()
+    metadata = {key for request, _ in wire.writes for key in request["metadata"]}
+    values = {request["metadata"][key] for request, _ in wire.writes for key in ("role", "source")}
+    source = "".join(
+        Path(goodmem_adk.__file__).with_name(module).read_text()
+        for module in ("_backend.py", "plugin.py", "tools.py")
+    )
+    settings = set(re.findall(r"getenv\(\"(\w+)\"\)", source))
+    assert names == {"goodmem_save", "goodmem_fetch"}
+    assert values == {"user", "model", "adk_plugin", "adk_tool"} and len(settings) == 5
+    documented = set(re.findall(r"`([^`\n]+)`", _README))
+    missing = sorted((names | arguments | metadata | values | settings) - documented)
+    assert not missing, f"README does not name: {missing}"

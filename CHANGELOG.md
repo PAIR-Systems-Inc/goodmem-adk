@@ -18,6 +18,14 @@
   scopes only through the `name_filter` query parameter and request bodies; a
   regression test records every request target to confirm this.
 
+### Documentation
+
+- The README now names what the model sees and what the code reads: the tools
+  `goodmem_save(content)` and `goodmem_fetch(query, top_k)`, the write metadata keys
+  `app_name`, `user_id`, `session_id`, `role` and `source` with their values, and
+  `GOODMEM_SPACE_NAME`. A new test derives these names from the tool declarations,
+  recorded writes and the source, and fails if the README omits any of them.
+
 ## 0.2.0 — 2026-09-15
 
 This release uses the official `goodmem` SDK and native asynchronous requests.
