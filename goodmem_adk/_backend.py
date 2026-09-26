@@ -3,6 +3,7 @@
 
 """ADK scope and content handling on top of the official asynchronous SDK."""
 
+import logging
 import os
 from collections import OrderedDict
 from collections.abc import AsyncIterator
@@ -31,6 +32,7 @@ from ._results import (
     SaveFailure,
 )
 
+_LOG = logging.getLogger(__name__)
 _INFORMATIONAL = {"FEATURE_DISABLED", "LLM_CAPABILITY_INFERRED"}
 _REQUEST_ERRORS = (GoodMemError, httpx.RequestError)
 
@@ -147,7 +149,21 @@ class Backend:
                             "No embedder is configured on GoodMem. Create one with the SDK "
                             "or GoodMem console, then set GOODMEM_EMBEDDER_ID."
                         )
+                    if len(embedders) > 1:
+                        # Picking one would embed this space with whichever model
+                        # the server happened to list first; searches embedded
+                        # with another model could not find what is written here.
+                        choices = ", ".join(sorted(str(e.embedder_id) for e in embedders))
+                        raise ValueError(
+                            f"GoodMem has {len(embedders)} embedders ({choices}); set "
+                            "GOODMEM_EMBEDDER_ID or embedder_id to choose the one this "
+                            "space should use."
+                        )
                     embedder_id = embedders[0].embedder_id
+                    _LOG.info(
+                        "No embedder configured; using the only one on the server: %s",
+                        embedder_id,
+                    )
                 try:
                     space = await client.spaces.create(
                         name=name,

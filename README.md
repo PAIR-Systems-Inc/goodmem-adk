@@ -14,7 +14,8 @@ pip install goodmem-adk
 
 You need a [GoodMem server](https://docs.goodmem.ai), an API key, and an existing
 embedder. Set `GOODMEM_BASE_URL` and `GOODMEM_API_KEY`; optionally select an
-embedder with `GOODMEM_EMBEDDER_ID`. Your agent can use any ADK-supported model.
+embedder with `GOODMEM_EMBEDDER_ID` (required when the server has more than one
+embedder). Your agent can use any ADK-supported model.
 
 ## Give your agent memory tools
 

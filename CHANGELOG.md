@@ -2,6 +2,19 @@
 
 ## 0.2.1 — 2026-09-25
 
+### Fixed
+
+- A new space no longer lands on an arbitrary embedder. With no `embedder_id` or
+  `GOODMEM_EMBEDDER_ID`, 0.2.0 built the space on `embedders[0]`, whichever
+  embedder the server listed first; with several embedders that could be a
+  different model from the one other spaces and searches use. The only embedder is
+  still used (and logged); with several, the save fails naming them and asking for
+  `GOODMEM_EMBEDDER_ID`, and no space is created.
+- The offline tests now exercise that path. Their mock `/v1/embedders` answers
+  carried only `embedderId`, which the SDK rejects, so choosing an embedder was
+  never tested; the mock now returns a complete embedder and a test checks it
+  against the SDK's own model.
+
 ### Security
 
 - `space_id`, `embedder_id`, `GOODMEM_SPACE_ID` and `GOODMEM_EMBEDDER_ID` must be

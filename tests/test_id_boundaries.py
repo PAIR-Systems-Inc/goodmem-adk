@@ -20,7 +20,7 @@ from goodmem_adk import GoodmemFetchTool, GoodmemPlugin, GoodmemSaveTool
 from goodmem_adk._backend import Backend
 from goodmem_adk.memory import GoodmemMemoryService
 from tests.support import all_text, responses, runner_for, text_content, turn
-from tests.wire import EMBEDDER_ID, memory, space
+from tests.wire import EMBEDDER_ID, embedder, memory, space
 
 pytestmark = [pytest.mark.enable_socket, pytest.mark.asyncio]
 
@@ -85,7 +85,7 @@ def server():
                 # Answer like a permissive server, so an unrefused ID is used for writes.
                 data = space(spaceId=path.rsplit("/", 1)[-1])
             elif path == "/v1/embedders":
-                data = {"embedders": [{"embedderId": EMBEDDER_ID}]}
+                data = {"embedders": [embedder()]}
             elif path == "/v1/memories":
                 data = memory(spaceId=body["spaceId"], metadata=body.get("metadata", {}))
             elif path == "/v1/memories:retrieve":
