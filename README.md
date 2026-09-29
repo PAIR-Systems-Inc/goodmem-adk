@@ -14,8 +14,12 @@ pip install goodmem-adk
 
 You need a [GoodMem server](https://docs.goodmem.ai), an API key, and an existing
 embedder. Set `GOODMEM_BASE_URL` and `GOODMEM_API_KEY`; optionally select an
-embedder with `GOODMEM_EMBEDDER_ID` (required when the server has more than one
-embedder). Your agent can use any ADK-supported model.
+embedder with `GOODMEM_EMBEDDER_ID` (required when creating a new space and more
+than one embedder is available). Your agent can use any ADK-supported model.
+
+After a second embedder is added to the server, existing spaces selected by ID or
+name keep working, but a new user's default space fails to initialize until
+`GOODMEM_EMBEDDER_ID` or `embedder_id` is set; even a first fetch can hit this.
 
 ## Give your agent memory tools
 

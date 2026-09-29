@@ -150,9 +150,12 @@ class Backend:
                             "or GoodMem console, then set GOODMEM_EMBEDDER_ID."
                         )
                     if len(embedders) > 1:
-                        # Picking one would embed this space with whichever model
-                        # the server happened to list first; searches embedded
-                        # with another model could not find what is written here.
+                        # fetch() sends the query text and the resolved space ID, and
+                        # GoodMem derives the query embedders from that space's own
+                        # embedders, so another space's model does not make this one
+                        # unsearchable. Refusing avoids an arbitrary, order-dependent
+                        # choice of embedding model/provider, with its quality and
+                        # cost consequences.
                         choices = ", ".join(sorted(str(e.embedder_id) for e in embedders))
                         raise ValueError(
                             f"GoodMem has {len(embedders)} embedders ({choices}); set "

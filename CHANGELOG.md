@@ -6,10 +6,14 @@
 
 - A new space no longer lands on an arbitrary embedder. With no `embedder_id` or
   `GOODMEM_EMBEDDER_ID`, 0.2.0 built the space on `embedders[0]`, whichever
-  embedder the server listed first; with several embedders that could be a
-  different model from the one other spaces and searches use. The only embedder is
-  still used (and logged); with several, the save fails naming them and asking for
-  `GOODMEM_EMBEDDER_ID`, and no space is created.
+  embedder the server listed first: an arbitrary, order-dependent choice of
+  embedding model/provider, with its quality and cost consequences. A different
+  model from other spaces did not, by itself, make a space's memories
+  unsearchable: GoodMem derives the query embedders from the searched space's
+  configured embedders. The only embedder is still used (and logged); with
+  several, the save or fetch that would create the space fails naming them and
+  asking for `GOODMEM_EMBEDDER_ID`, and no space is created. Existing spaces
+  selected by ID or name keep working with several embedders and no embedder ID.
 - The offline tests now exercise that path. Their mock `/v1/embedders` answers
   carried only `embedderId`, which the SDK rejects, so choosing an embedder was
   never tested; the mock now returns a complete embedder and a test checks it
@@ -25,6 +29,13 @@
   resolved dot segments: `space_id="../embedders/<id>"` requested
   `GET /v1/embedders/<id>`, `"../spaces/<other>"` or `"a/../../spaces/<other>"`
   resolved and then saved memories into `<other>`, and `"<id>?x=1"` added a query string.
+- This hardens developer/environment-supplied configuration against request-path
+  manipulation; it is not evidence of an authorization bypass. The model-facing
+  tools cannot supply IDs, and a caller controlling configuration can still select
+  another valid UUID; server-side authorization remains responsible for whether
+  that resource may be read or written. `embedder_id` is body data in this
+  integration, so its UUID check provides consistent configuration validation
+  rather than closing the same URL-path issue.
 - Uppercase UUIDs are accepted and sent in lowercase. An empty `GOODMEM_EMBEDDER_ID`
   is now refused, as an empty `GOODMEM_SPACE_ID` already was.
 - Model-facing tool arguments carry no IDs. ADK user and app names select default
