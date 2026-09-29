@@ -302,6 +302,33 @@ async def test_a_configured_embedder_is_used_among_several(wire, monkeypatch):
         await runner.close()
 
 
+@pytest.mark.parametrize("selector", [{"space_id": SPACE_ID}, {"space_name": "test-space"}])
+async def test_an_existing_space_works_among_several_embedders_without_a_choice(
+    wire, monkeypatch, selector
+):
+    # The embedder choice only matters when a space has to be created, so adding a
+    # second embedder to the server must not break users of an existing space.
+    monkeypatch.delenv("GOODMEM_EMBEDDER_ID", raising=False)
+    wire.embedders = [embedder(), embedder(OTHER_EMBEDDER_ID, "text-embedding-3-large")]
+    wire.events = [chunk()]
+    runner, _ = runner_for(
+        tools=[
+            GoodmemSaveTool(client=wire.client, **selector),
+            GoodmemFetchTool(client=wire.client, **selector),
+        ]
+    )
+    try:
+        _, events = await turn(runner, "user", "SAVE: note")
+        assert responses(events, "goodmem_save")[0]["success"]
+        _, events = await turn(runner, "user", "FETCH: note")
+        assert responses(events, "goodmem_fetch")[0]["success"]
+        assert [data["spaceId"] for data, _ in wire.writes] == [SPACE_ID]
+        assert space_creations(wire) == []
+        assert not [request for request in wire.requests if request[1] == "/v1/embedders"]
+    finally:
+        await runner.close()
+
+
 async def test_definitions_after_chunks_preserve_metadata_and_all_unique_chunks(wire):
     wire.events = [
         chunk("Alpha fact", metadata={"filename": "chunk-label"}),
