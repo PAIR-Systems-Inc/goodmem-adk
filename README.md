@@ -14,7 +14,12 @@ pip install goodmem-adk
 
 You need a [GoodMem server](https://docs.goodmem.ai), an API key, and an existing
 embedder. Set `GOODMEM_BASE_URL` and `GOODMEM_API_KEY`; optionally select an
-embedder with `GOODMEM_EMBEDDER_ID`. Your agent can use any ADK-supported model.
+embedder with `GOODMEM_EMBEDDER_ID` (required when creating a new space and more
+than one embedder is available). Your agent can use any ADK-supported model.
+
+After a second embedder is added to the server, existing spaces selected by ID or
+name keep working, but a new user's default space fails to initialize until
+`GOODMEM_EMBEDDER_ID` or `embedder_id` is set; even a first fetch can hit this.
 
 ## Give your agent memory tools
 
@@ -74,7 +79,16 @@ and supplies relevant context before model calls.
 Defaults are `adk_tool_{user_id}` for tools and `adk_chat_{user_id}` for the
 plugin. Set the same `space_id` or `space_name` on both to share memory. Explicit
 scopes are shared by everyone using that configuration; defaults separate users,
-not applications. Explicit arguments override environment scope settings.
+not applications. Explicit arguments override the environment scope settings
+`GOODMEM_SPACE_ID`, `GOODMEM_SPACE_NAME` and `GOODMEM_EMBEDDER_ID`.
+`space_id`, `embedder_id`, `GOODMEM_SPACE_ID` and `GOODMEM_EMBEDDER_ID` must be
+GoodMem UUIDs; anything else is refused before a request is sent, because a space
+ID becomes part of a request URL where `../embedders/<id>` would reach another resource.
+
+The model sees two tools: `goodmem_save` with a `content` argument and
+`goodmem_fetch` with `query` and an optional `top_k`. Every write records
+`app_name`, `user_id`, `session_id`, `role` (`user` or `model`) and `source`
+(`adk_tool` or `adk_plugin`) as memory metadata, returned with fetched chunks.
 
 Writes return accepted IDs and processing states. Indexing happens asynchronously;
 empty searches are never retried automatically. Failed attachments are reported

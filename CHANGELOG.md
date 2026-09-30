@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.2.1 — 2026-09-25
+
+### Fixed
+
+- A new space no longer lands on an arbitrary embedder. With no `embedder_id` or
+  `GOODMEM_EMBEDDER_ID`, 0.2.0 built the space on `embedders[0]`, whichever
+  embedder the server listed first: an arbitrary, order-dependent choice of
+  embedding model/provider, with its quality and cost consequences. A different
+  model from other spaces did not, by itself, make a space's memories
+  unsearchable: GoodMem derives the query embedders from the searched space's
+  configured embedders. The only embedder is still used (and logged); with
+  several, the save or fetch that would create the space fails naming them and
+  asking for `GOODMEM_EMBEDDER_ID`, and no space is created. Existing spaces
+  selected by ID or name keep working with several embedders and no embedder ID.
+- The offline tests now exercise that path. Their mock `/v1/embedders` answers
+  carried only `embedderId`, which the SDK rejects, so choosing an embedder was
+  never tested; the mock now returns a complete embedder and a test checks it
+  against the SDK's own model.
+
+### Security
+
+- `space_id`, `embedder_id`, `GOODMEM_SPACE_ID` and `GOODMEM_EMBEDDER_ID` must be
+  UUIDs, as all GoodMem IDs are. Any other value raises `ValueError` naming the
+  setting when a plugin, tool or the internal service is constructed, and the space
+  ID is checked again immediately before it becomes `GET /v1/spaces/{id}`. No request
+  is sent. Previously the SDK placed the value into the URL as given and httpx
+  resolved dot segments: `space_id="../embedders/<id>"` requested
+  `GET /v1/embedders/<id>`, `"../spaces/<other>"` or `"a/../../spaces/<other>"`
+  resolved and then saved memories into `<other>`, and `"<id>?x=1"` added a query string.
+- This hardens developer/environment-supplied configuration against request-path
+  manipulation; it is not evidence of an authorization bypass. The model-facing
+  tools cannot supply IDs, and a caller controlling configuration can still select
+  another valid UUID; server-side authorization remains responsible for whether
+  that resource may be read or written. `embedder_id` is body data in this
+  integration, so its UUID check provides consistent configuration validation
+  rather than closing the same URL-path issue.
+- Uppercase UUIDs are accepted and sent in lowercase. An empty `GOODMEM_EMBEDDER_ID`
+  is now refused, as an empty `GOODMEM_SPACE_ID` already was.
+- Model-facing tool arguments carry no IDs. ADK user and app names select default
+  scopes only through the `name_filter` query parameter and request bodies; a
+  regression test records every request target to confirm this.
+
+### Documentation
+
+- The README now names what the model sees and what the code reads: the tools
+  `goodmem_save(content)` and `goodmem_fetch(query, top_k)`, the write metadata keys
+  `app_name`, `user_id`, `session_id`, `role` and `source` with their values, and
+  `GOODMEM_SPACE_NAME`. A new test derives these names from the tool declarations,
+  recorded writes and the source, and fails if the README omits any of them.
+
 ## 0.2.0 — 2026-09-15
 
 This release uses the official `goodmem` SDK and native asynchronous requests.

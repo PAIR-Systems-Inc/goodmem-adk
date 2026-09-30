@@ -15,7 +15,7 @@ from ._results import (
 from .plugin import GoodmemPlugin
 from .tools import GoodmemFetchTool, GoodmemSaveTool
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "AcceptedMemory",

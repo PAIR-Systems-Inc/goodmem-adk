@@ -23,7 +23,7 @@ from tests.support import (
     text_content,
     turn,
 )
-from tests.wire import CHUNK_ID, EMBEDDER_ID, MEMORY_ID, SPACE_ID, chunk, memory, space
+from tests.wire import CHUNK_ID, EMBEDDER_ID, MEMORY_ID, SPACE_ID, chunk, embedder, memory, space
 
 pytestmark = pytest.mark.asyncio
 
@@ -39,6 +39,7 @@ class WireServer:
         self.content_error = None
         self.bad_stream = False
         self.empty_embedders = False
+        self.embedders = [embedder()]
 
     async def handle(self, request):
         data = json.loads(request.content) if request.content else {}
@@ -56,6 +57,8 @@ class WireServer:
             )
         if path == "/v1/spaces":
             value = space(spaceId=str(uuid.uuid4()), name=data["name"])
+            # A real server builds the space on the embedder it was asked for.
+            value["spaceEmbedders"][0]["embedderId"] = data["spaceEmbedders"][0]["embedderId"]
             self.spaces[value["spaceId"]] = value
             if self.conflict_once:
                 self.conflict_once = False
@@ -71,7 +74,7 @@ class WireServer:
         if path == "/v1/embedders":
             return httpx.Response(
                 200,
-                json={"embedders": [] if self.empty_embedders else [{"embedderId": EMBEDDER_ID}]},
+                json={"embedders": [] if self.empty_embedders else self.embedders},
             )
         if path == "/v1/memories:retrieve":
             if self.content_error:
@@ -192,8 +195,8 @@ async def test_environment_scope_used_when_no_explicit_scope(wire, monkeypatch, 
     "options",
     [
         {"space_id": SPACE_ID, "space_name": "wrong-name"},
-        {"space_id": "missing-space"},
-        {"space_id": SPACE_ID, "embedder_id": "wrong-embedder"},
+        {"space_id": "00000000-0000-4000-8000-0000000000ff"},
+        {"space_id": SPACE_ID, "embedder_id": "00000000-0000-4000-8000-0000000000fe"},
     ],
 )
 async def test_invalid_scope_fails_without_a_write(wire, options):
@@ -236,6 +239,92 @@ async def test_absent_embedders_does_not_create_google_resources(wire, monkeypat
         result = responses(events, "goodmem_save")[0]
         assert not result["success"] and "No embedder" in all_text(result["errors"])
         assert not any(request[:2] == ("POST", "/v1/embedders") for request in wire.requests)
+    finally:
+        await runner.close()
+
+
+def test_the_mock_embedder_is_one_the_sdk_accepts():
+    # The mocks once returned {"embedderId": ...} only; the SDK rejects that, so
+    # the embedder-selection path was never exercised offline.
+    from goodmem.models.list_embedders_response import ListEmbeddersResponse
+
+    parsed = ListEmbeddersResponse.model_validate({"embedders": [embedder()]})
+    assert parsed.embedders[0].embedder_id == EMBEDDER_ID
+
+
+OTHER_EMBEDDER_ID = "00000000-0000-4000-8000-000000000009"
+
+
+def space_creations(wire):
+    return [request[2] for request in wire.requests if request[:2] == ("POST", "/v1/spaces")]
+
+
+async def test_the_only_embedder_is_used_when_none_is_configured(wire, monkeypatch):
+    monkeypatch.delenv("GOODMEM_EMBEDDER_ID", raising=False)
+    runner, _ = runner_for(tools=[GoodmemSaveTool(client=wire.client)])
+    try:
+        _, events = await turn(runner, "user", "SAVE: note")
+        assert responses(events, "goodmem_save")[0]["success"]
+        [created] = space_creations(wire)
+        assert created["spaceEmbedders"] == [{"embedderId": EMBEDDER_ID}]
+    finally:
+        await runner.close()
+
+
+async def test_several_embedders_without_a_choice_are_refused(wire, monkeypatch):
+    # P32: taking embedders[0] would build the space on whichever model the
+    # server listed first. With several, the choice has to be the developer's.
+    monkeypatch.delenv("GOODMEM_EMBEDDER_ID", raising=False)
+    wire.embedders = [embedder(), embedder(OTHER_EMBEDDER_ID, "text-embedding-3-large")]
+    runner, _ = runner_for(tools=[GoodmemSaveTool(client=wire.client)])
+    try:
+        _, events = await turn(runner, "user", "SAVE: note")
+        result = responses(events, "goodmem_save")[0]
+        assert not result["success"]
+        errors = all_text(result["errors"])
+        assert EMBEDDER_ID in errors and OTHER_EMBEDDER_ID in errors
+        assert "GOODMEM_EMBEDDER_ID" in errors
+        assert space_creations(wire) == []
+    finally:
+        await runner.close()
+
+
+async def test_a_configured_embedder_is_used_among_several(wire, monkeypatch):
+    monkeypatch.setenv("GOODMEM_EMBEDDER_ID", OTHER_EMBEDDER_ID)
+    wire.embedders = [embedder(), embedder(OTHER_EMBEDDER_ID, "text-embedding-3-large")]
+    runner, _ = runner_for(tools=[GoodmemSaveTool(client=wire.client)])
+    try:
+        _, events = await turn(runner, "user", "SAVE: note")
+        assert responses(events, "goodmem_save")[0]["success"]
+        [created] = space_creations(wire)
+        assert created["spaceEmbedders"] == [{"embedderId": OTHER_EMBEDDER_ID}]
+    finally:
+        await runner.close()
+
+
+@pytest.mark.parametrize("selector", [{"space_id": SPACE_ID}, {"space_name": "test-space"}])
+async def test_an_existing_space_works_among_several_embedders_without_a_choice(
+    wire, monkeypatch, selector
+):
+    # The embedder choice only matters when a space has to be created, so adding a
+    # second embedder to the server must not break users of an existing space.
+    monkeypatch.delenv("GOODMEM_EMBEDDER_ID", raising=False)
+    wire.embedders = [embedder(), embedder(OTHER_EMBEDDER_ID, "text-embedding-3-large")]
+    wire.events = [chunk()]
+    runner, _ = runner_for(
+        tools=[
+            GoodmemSaveTool(client=wire.client, **selector),
+            GoodmemFetchTool(client=wire.client, **selector),
+        ]
+    )
+    try:
+        _, events = await turn(runner, "user", "SAVE: note")
+        assert responses(events, "goodmem_save")[0]["success"]
+        _, events = await turn(runner, "user", "FETCH: note")
+        assert responses(events, "goodmem_fetch")[0]["success"]
+        assert [data["spaceId"] for data, _ in wire.writes] == [SPACE_ID]
+        assert space_creations(wire) == []
+        assert not [request for request in wire.requests if request[1] == "/v1/embedders"]
     finally:
         await runner.close()
 
@@ -464,7 +553,8 @@ async def test_matching_space_can_be_on_a_later_sdk_page(wire):
 
 
 async def test_ambiguous_accessible_space_names_require_an_id(wire):
-    wire.spaces["another-id"] = space(spaceId="another-id")
+    another = "00000000-0000-4000-8000-0000000000fd"
+    wire.spaces[another] = space(spaceId=another)
     runner, _ = runner_for(tools=[GoodmemSaveTool(client=wire.client, space_name="test-space")])
     try:
         _, events = await turn(runner, "user", "SAVE: note")

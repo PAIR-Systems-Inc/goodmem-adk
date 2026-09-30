@@ -17,8 +17,9 @@ class GoodmemSaveTool(FunctionTool):
     Args:
         base_url: GoodMem server URL; defaults to GOODMEM_BASE_URL.
         api_key: GoodMem credential; defaults to GOODMEM_API_KEY.
-        embedder_id: Embedder for new spaces; otherwise uses an existing embedder.
-        space_id: Explicit space ID. If a name is also supplied it must match.
+        embedder_id: Embedder UUID for new spaces; otherwise the server's only embedder
+            is used, and with several one must be chosen.
+        space_id: Explicit space UUID. If a name is also supplied it must match.
         space_name: Explicit shared space; otherwise defaults to adk_tool_{user_id}.
         client: Caller-owned asynchronous GoodMem SDK, instead of connection settings.
         timeout: Request timeout when the tool creates its own SDK.
@@ -79,8 +80,8 @@ class GoodmemFetchTool(FunctionTool):
     Args:
         base_url: GoodMem server URL; defaults to GOODMEM_BASE_URL.
         api_key: GoodMem credential; defaults to GOODMEM_API_KEY.
-        embedder_id: Embedder for new spaces.
-        space_id: Explicit space ID. If a name is also supplied it must match.
+        embedder_id: Embedder UUID for new spaces.
+        space_id: Explicit space UUID. If a name is also supplied it must match.
         space_name: Explicit shared space; otherwise defaults to adk_tool_{user_id}.
         top_k: Default number of chunks, between 1 and 100.
         client: Caller-owned asynchronous SDK, instead of connection settings.

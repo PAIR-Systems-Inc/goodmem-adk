@@ -16,6 +16,11 @@ against the published GoodMem SDK. They mock HTTP responses, not the integration
 own methods. Socket tests independently delay a real local HTTP server and verify
 that another coroutine continues running. Failure cases include invalid credentials,
 corrupt NDJSON, unknown server statuses and partially failed attachment uploads.
+`tests/test_id_boundaries.py` configures every component and the internal service
+with traversal, percent-encoded, whitespace, query, fragment and empty variants of
+`space_id`, `embedder_id` and their environment settings. A local socket server
+must record no request for any of them, while a valid UUID reaches exactly
+`GET /v1/spaces/<id>` and the writes or searches for that space.
 The README agents, example apps, and changelog's SDK migration snippet are executed
 through actual ADK runners too.
 

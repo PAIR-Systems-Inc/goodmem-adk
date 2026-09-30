@@ -3,6 +3,7 @@
 
 """ADK scope and content handling on top of the official asynchronous SDK."""
 
+import logging
 import os
 from collections import OrderedDict
 from collections.abc import AsyncIterator
@@ -21,6 +22,7 @@ from goodmem.models.space_embedder_config import SpaceEmbedderConfig
 from google.genai import types
 
 from ._attachments import Attachment, attachments_from_content, write_attachment
+from ._ids import require_uuid
 from ._results import (
     AcceptedMemory,
     GoodmemFetchResponse,
@@ -30,6 +32,7 @@ from ._results import (
     SaveFailure,
 )
 
+_LOG = logging.getLogger(__name__)
 _INFORMATIONAL = {"FEATURE_DISABLED", "LLM_CAPABILITY_INFERRED"}
 _REQUEST_ERRORS = (GoodMemError, httpx.RequestError)
 
@@ -83,14 +86,22 @@ class Backend:
             raise ValueError("timeout must be positive")
         self._timeout = timeout
         # Explicit scope settings take precedence over ALL environment scope settings.
+        space_setting, embedder_setting = "space_id", "embedder_id"
         if space_id is None and space_name is None:
             space_id = os.getenv("GOODMEM_SPACE_ID")
             space_name = os.getenv("GOODMEM_SPACE_NAME")
-        if space_id == "" or space_name == "" or embedder_id == "":
-            raise ValueError("Scope and embedder settings must not be empty strings")
-        self.space_id = space_id
+            space_setting = "GOODMEM_SPACE_ID"
+        if embedder_id is None:
+            embedder_id = os.getenv("GOODMEM_EMBEDDER_ID")
+            embedder_setting = "GOODMEM_EMBEDDER_ID"
+        if space_name == "":
+            raise ValueError("space_name must not be an empty string")
+        # IDs can reach request URLs. Refuse anything but a UUID before any request.
+        self.space_id = None if space_id is None else require_uuid(space_id, space_setting)
         self.space_name = space_name
-        self.embedder_id = embedder_id or os.getenv("GOODMEM_EMBEDDER_ID")
+        self.embedder_id = (
+            None if embedder_id is None else require_uuid(embedder_id, embedder_setting)
+        )
         self._spaces: OrderedDict[str, str] = OrderedDict()
 
     @asynccontextmanager
@@ -115,14 +126,16 @@ class Backend:
         Returns:
             The validated space ID for this component and connection.
         """
+        # The configured ID becomes GET /v1/spaces/{id}; check it again at that boundary.
+        space_id = None if self.space_id is None else require_uuid(self.space_id, "space_id")
         name = self.space_name or default_name
-        cache_key = self.space_id or name
+        cache_key = space_id or name
         if cache_key in self._spaces:
             self._spaces.move_to_end(cache_key)
             return self._spaces[cache_key]
         space: Space | None
-        if self.space_id:
-            space = await client.spaces.get(id=self.space_id)
+        if space_id is not None:
+            space = await client.spaces.get(id=space_id)
             if self.space_name and space.name != self.space_name:
                 raise ValueError("space_id does not match the configured space_name")
         else:
@@ -136,7 +149,24 @@ class Backend:
                             "No embedder is configured on GoodMem. Create one with the SDK "
                             "or GoodMem console, then set GOODMEM_EMBEDDER_ID."
                         )
+                    if len(embedders) > 1:
+                        # fetch() sends the query text and the resolved space ID, and
+                        # GoodMem derives the query embedders from that space's own
+                        # embedders, so another space's model does not make this one
+                        # unsearchable. Refusing avoids an arbitrary, order-dependent
+                        # choice of embedding model/provider, with its quality and
+                        # cost consequences.
+                        choices = ", ".join(sorted(str(e.embedder_id) for e in embedders))
+                        raise ValueError(
+                            f"GoodMem has {len(embedders)} embedders ({choices}); set "
+                            "GOODMEM_EMBEDDER_ID or embedder_id to choose the one this "
+                            "space should use."
+                        )
                     embedder_id = embedders[0].embedder_id
+                    _LOG.info(
+                        "No embedder configured; using the only one on the server: %s",
+                        embedder_id,
+                    )
                 try:
                     space = await client.spaces.create(
                         name=name,

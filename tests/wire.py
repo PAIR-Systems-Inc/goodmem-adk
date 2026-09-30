@@ -16,6 +16,23 @@ def common():
     }
 
 
+def embedder(embedder_id=EMBEDDER_ID, name="text-embedding-3-small"):
+    """An embedder as GoodMem returns it; the SDK rejects anything thinner."""
+    return {
+        **common(),
+        "embedderId": embedder_id,
+        "displayName": name,
+        "providerType": "OPENAI",
+        "endpointUrl": "https://api.openai.com/v1",
+        "modelIdentifier": name,
+        "dimensionality": 1536,
+        "distributionType": "DENSE",
+        "supportedModalities": ["TEXT"],
+        "labels": {},
+        "ownerId": OWNER_ID,
+    }
+
+
 def space(**overrides):
     return {
         **common(),
